@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lucky Fish</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='50' font-size='52'%3E🐟%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="title">
+      <span class="title-emoji">🎣</span>
+      Lucky Fish
+      <span class="title-emoji">🐟</span>
+    </h1>
+    <div class="header-row">
+      <div id="next-goal" class="next-goal" aria-label="Next goal"></div>
+      <button id="tackle-bag-btn" class="tackle-bag-chip" type="button" aria-label="Tackle bag — switch rods">
+        <span class="tackle-bag-emoji">🎒</span>
+        <span class="tackle-bag-rod" id="tackle-bag-rod"></span>
+      </button>
+      <button id="pearls" class="pearls" type="button" aria-label="Pearls — tap to open pond shop">
+        <span class="pearls-emoji">🫧</span>
+        <span class="pearls-count">0</span>
+      </button>
+    </div>
+    <div id="buff-row" class="buff-row" aria-label="Active buffs"></div>
+  </header>
+
+  <main class="board">
+    <!-- Pond + cast -->
+    <section class="panel pond-panel">
+      <div id="pond" class="pond" aria-label="Pond">
+        <!-- V6 sky zone (above the water surface) -->
+        <div class="sky-zone" aria-hidden="true">
+          <div id="sky-ambient" class="sky-ambient"></div>
+          <div class="far-bank" aria-hidden="true"></div>
+        </div>
+        <!-- V6 water surface: stickerish chunky wave line -->
+        <svg class="water-surface" viewBox="0 0 400 16" preserveAspectRatio="none" aria-hidden="true">
+          <path class="surface-fill" d="M0,6 Q25,2 50,6 T100,6 T150,6 T200,6 T250,6 T300,6 T350,6 T400,6 L400,16 L0,16 Z"/>
+          <path class="surface-crest" d="M0,6 Q25,2 50,6 T100,6 T150,6 T200,6 T250,6 T300,6 T350,6 T400,6" fill="none"/>
+        </svg>
+        <div class="pond-shimmer"></div>
+        <div class="pond-rays" aria-hidden="true"></div>
+        <div id="bubbles" class="bubbles" aria-hidden="true"></div>
+        <div id="edge-flora" class="edge-flora" aria-hidden="true"></div>
+        <div id="decorations" class="decorations"></div>
+        <div id="surface-decorations" class="surface-decorations"></div>
+        <div id="ambient-fish" class="ambient-fish"></div>
+        <div class="pond-center">
+          <div id="cast-indicator" class="cast-indicator">Cast your line!</div>
+          <div id="cast-reel" class="cast-reel hidden" aria-hidden="true">
+            <div class="cast-reel-window">
+              <div id="cast-reel-strip" class="cast-reel-strip"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button id="cast-btn" class="cast-btn">
+        <span class="cast-emoji">🎣</span>
+        <span>Cast!</span>
+      </button>
+    </section>
+
+    <!-- Inventory -->
+    <aside class="panel catches-panel">
+      <div class="panel-header">
+        <h2>Your Catches</h2>
+      </div>
+      <button
+        id="eat-all-btn"
+        class="eat-all-btn hidden"
+        type="button"
+        aria-label="Hold to eat all"
+      >
+        <span class="eat-all-fill"></span>
+        <span class="eat-all-text">
+          <span class="eat-all-emoji">🍽️</span>
+          <span>Hold to Eat All</span>
+        </span>
+      </button>
+      <div id="catches" class="catches">
+        <div class="empty-catches">No catches yet — give it a cast!</div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Album modal -->
+  <div id="album-overlay" class="album-overlay hidden" aria-hidden="true">
+    <div class="album-modal" role="dialog" aria-label="Fish Album">
+      <div class="album-header">
+        <h2>📖 Fish Album</h2>
+        <div id="album-progress" class="album-progress"></div>
+        <button id="album-close" class="album-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="album-grid" class="album-grid"></div>
+    </div>
+  </div>
+
+  <!-- Pond shop modal -->
+  <div id="shop-overlay" class="album-overlay hidden" aria-hidden="true">
+    <div class="album-modal" role="dialog" aria-label="Pond Shop">
+      <div class="album-header">
+        <h2>🏪 Pond Shop</h2>
+        <div class="album-progress">You have <strong id="shop-pearls">0</strong> 🫧</div>
+        <button id="shop-close" class="album-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="shop-grid" class="shop-grid"></div>
+    </div>
+  </div>
+
+  <!-- Tackle bag modal (rod picker) -->
+  <div id="tackle-bag-overlay" class="album-overlay hidden" aria-hidden="true">
+    <div class="album-modal tackle-bag-modal" role="dialog" aria-label="Tackle Bag">
+      <div class="album-header">
+        <h2>🎒 Tackle Bag</h2>
+        <div class="album-progress">Pick your rod</div>
+        <button id="tackle-bag-close" class="album-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="rods" class="rods tackle-bag-grid"></div>
+    </div>
+  </div>
+
+  <!-- V9: Name-your-legendary modal -->
+  <div id="naming-overlay" class="album-overlay hidden" aria-hidden="true">
+    <div class="album-modal naming-modal" role="dialog" aria-label="Name your catch">
+      <div class="album-header">
+        <h2 id="naming-title">Name your catch!</h2>
+        <div class="album-progress">Pick one — tap to save</div>
+        <button id="naming-close" class="album-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="naming-hero" class="naming-hero"></div>
+      <div id="naming-grid" class="naming-grid"></div>
+    </div>
+  </div>
+
+  <!-- Achievements modal -->
+  <div id="achievements-overlay" class="album-overlay hidden" aria-hidden="true">
+    <div class="album-modal achievements-modal" role="dialog" aria-label="Achievements">
+      <div class="album-header">
+        <h2>🏆 Achievements</h2>
+        <div id="achievements-progress" class="album-progress"></div>
+        <button id="achievements-close" class="album-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="achievements-list" class="achievements-list"></div>
+    </div>
+  </div>
+
+  <!-- V8 FAB stack — bottom-right, vertically aligned -->
+  <div class="fab-stack">
+    <button id="album-btn" class="fab album-fab" type="button" aria-label="Open fish album">📖</button>
+    <button id="achievements-btn" class="fab achievements-fab" type="button" aria-label="Open achievements">🏆</button>
+    <button id="shop-btn" class="fab shop-fab" type="button" aria-label="Open pond shop">🏪</button>
+  </div>
+
+  <!-- Settings FAB, bottom-left -->
+  <button id="settings-btn" class="settings-fab" type="button" aria-label="Open settings">⚙️</button>
+
+  <!-- Settings modal -->
+  <div id="settings-overlay" class="album-overlay hidden" aria-hidden="true">
+    <div class="album-modal settings-modal" role="dialog" aria-label="Settings">
+      <div class="album-header">
+        <h2>⚙️ Settings</h2>
+        <button id="settings-close" class="album-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="setting-row">
+          <label for="mute-toggle" class="setting-label">
+            <span>🔊 Sounds</span>
+            <span class="setting-hint">Catches, eating, shinies</span>
+          </label>
+          <button
+            id="mute-toggle"
+            class="mute-toggle"
+            type="button"
+            role="switch"
+            aria-checked="true"
+          >
+            <span class="mute-track"><span class="mute-thumb"></span></span>
+            <span class="mute-state">On</span>
+          </button>
+        </div>
+
+        <div class="setting-row danger">
+          <div class="setting-label">
+            <span>⚠️ Reset Everything</span>
+            <span class="setting-hint">Erase catches, pearls, rods, decorations. Cannot be undone.</span>
+          </div>
+          <button id="reset-btn" class="reset-btn" type="button">Reset…</button>
+        </div>
+
+        <div id="reset-confirm" class="reset-confirm hidden">
+          <p class="reset-warn">This erases your whole album, pearls, unlocked rods, decorations, and shinies. Are you sure?</p>
+          <div class="reset-confirm-buttons">
+            <button id="reset-cancel" class="reset-cancel" type="button">Cancel</button>
+            <button id="reset-yes" class="reset-yes" type="button" disabled>Yes, erase (3)</button>
+          </div>
+        </div>
+
+        <div class="settings-footer">Lucky Fish — v5 · kid-safe pond edition</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notifications pile in the corner -->
+  <div id="notifications" class="notifications" aria-live="polite"></div>
+
+  <script src="game.js"></script>
+</body>
+</html>
