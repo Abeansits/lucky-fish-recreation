@@ -210,8 +210,21 @@ h2 {
   font-weight: 700;
   color: var(--ink);
   font-size: 0.95rem;
-  animation: pillPop 280ms cubic-bezier(.3,1.5,.5,1);
+  animation:
+    pillPop 440ms cubic-bezier(.3, 1.7, .45, 1) both,
+    pillGlowSweep 720ms ease-out both;
   isolation: isolate;
+}
+
+.buff-pill.autoreel-pill {
+  border-color: #58c8e8;
+  --pill-tint: #cdf0fb;
+  animation:
+    pillPop 440ms cubic-bezier(.3, 1.7, .45, 1) both,
+    autoreelPulse 1.6s ease-in-out infinite 440ms;
+}
+.buff-pill.autoreel-pill .pill-emoji {
+  animation: autoreelRodBob 1.2s ease-in-out infinite;
 }
 .buff-pill::before {
   content: "";
@@ -1127,8 +1140,21 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   to { transform: translateX(120%) scale(0.9); opacity: 0; }
 }
 @keyframes pillPop {
-  from { transform: translateY(-12px) scale(0.8); opacity: 0; }
-  to { transform: translateY(0) scale(1); opacity: 1; }
+  0%   { transform: translateY(-10px) scale(0.55); opacity: 0; }
+  60%  { transform: translateY(2px)   scale(1.14); opacity: 1; }
+  100% { transform: translateY(0)     scale(1);    opacity: 1; }
+}
+@keyframes pillGlowSweep {
+  0%, 100% { box-shadow: var(--shadow-soft); }
+  40%      { box-shadow: var(--shadow-soft), 0 0 16px 4px rgba(255, 210, 80, 0.55); }
+}
+@keyframes autoreelPulse {
+  0%, 100% { box-shadow: var(--shadow-soft); }
+  50%      { box-shadow: var(--shadow-soft), 0 0 14px 3px rgba(88, 200, 232, 0.5); }
+}
+@keyframes autoreelRodBob {
+  0%, 100% { transform: rotate(-4deg); }
+  50%      { transform: rotate(8deg); }
 }
 @keyframes entryIn {
   from { transform: scale(0.94); opacity: 0; }

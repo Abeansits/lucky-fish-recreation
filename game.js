@@ -237,6 +237,7 @@
     namingOpen: false,
     namingSpecies: null, // V9: fishId of the species currently being named
     eatingAll: false,
+    autoReel: null,       // { endsAt, totalMs } — set by shiny-eat, chains casts until expiry
   };
 
   // ---------- DOM ----------
@@ -454,6 +455,30 @@
     playFile("eat");
   }
 
+  // Ascending chirp when a buff pill appears — pitch + body scale with rarity
+  // so Eat-All's three-pop climax audibly peaks on the best buff. Respects mute.
+  function playBuffAppear(rarity) {
+    if (audioMuted()) return;
+    const tones = {
+      common:    { freq: 520, slideTo: 680,  vol: 0.10 },
+      uncommon:  { freq: 620, slideTo: 820,  vol: 0.12 },
+      rare:      { freq: 720, slideTo: 960,  vol: 0.14 },
+      legendary: { freq: 820, slideTo: 1140, vol: 0.16 },
+      mythic:    { freq: 920, slideTo: 1320, vol: 0.18 },
+    };
+    const t = tones[rarity] || tones.common;
+    blip({ freq: t.freq, slideTo: t.slideTo, duration: 0.22, type: "triangle", vol: t.vol, attack: 0.008, release: 0.12 });
+    if (rarity === "legendary" || rarity === "mythic") {
+      blip({ freq: t.freq * 1.5, slideTo: t.slideTo * 1.5, duration: 0.24, type: "sine", vol: t.vol * 0.65, attack: 0.015, release: 0.14 });
+    }
+  }
+
+  function playAutoReelStart() {
+    if (audioMuted()) return;
+    blip({ freq: 540, slideTo: 1080, duration: 0.32, type: "triangle", vol: 0.14, attack: 0.01, release: 0.16 });
+    blip({ freq: 810, slideTo: 1620, duration: 0.28, type: "sine",     vol: 0.09, attack: 0.02, release: 0.14 });
+  }
+
   function playShinySound() {
     // Distinct from rarity tier SFX: a crystal-chime ascending glissando +
     // sparkly upper-octave tinkles, over a shimmering pad. Longer than the
@@ -620,6 +645,7 @@
       <span class="pill-time">${buff.duration || Math.ceil(buff.totalMs / 1000)}s</span>
     `;
     $buffRow.appendChild(pill);
+    playBuffAppear(buff.rarity);
     entry = { pill, timeEl: pill.querySelector(".pill-time"), buffRef: buff };
     buffPills.set(buff.type, entry);
     return entry;
@@ -635,6 +661,7 @@
       const secs = Math.ceil(remaining / 1000);
       if (entry.timeEl.textContent !== `${secs}s`) entry.timeEl.textContent = `${secs}s`;
     }
+    updateAutoReelPill(now);
     // Drop pills for buffs no longer active.
     for (const [type, entry] of [...buffPills.entries()]) {
       if (!state.buffs.has(type) || state.buffs.get(type) !== entry.buffRef) {
@@ -642,6 +669,60 @@
         buffPills.delete(type);
       }
     }
+  }
+
+  // ---------- Shiny auto-reel ----------
+  // Eating a shiny kicks off 20s of auto-casting. Stacks refresh the timer back
+  // to a full 20s (simpler + a little more generous than additive). The pill
+  // lives in the buff row alongside normal buffs so the UI stays cohesive.
+  const AUTO_REEL_MS = 20000;
+  const AUTO_REEL_GAP_MS = 450;
+  let autoReelPill = null;
+
+  function isAutoReelActive() {
+    return !!(state.autoReel && state.autoReel.endsAt > performance.now());
+  }
+
+  function startAutoReel() {
+    state.autoReel = {
+      endsAt: performance.now() + AUTO_REEL_MS,
+      totalMs: AUTO_REEL_MS,
+    };
+    playAutoReelStart();
+    updateBuffPills();
+    scheduleNextAutoCast();
+  }
+
+  function scheduleNextAutoCast() {
+    if (!isAutoReelActive() || state.casting) return;
+    setTimeout(() => {
+      if (!isAutoReelActive() || state.casting) return;
+      cast();
+    }, AUTO_REEL_GAP_MS);
+  }
+
+  function updateAutoReelPill(now) {
+    const ar = state.autoReel;
+    if (!ar || ar.endsAt <= now) {
+      if (autoReelPill) { autoReelPill.remove(); autoReelPill = null; }
+      if (ar) state.autoReel = null;
+      return;
+    }
+    if (!autoReelPill) {
+      autoReelPill = document.createElement("div");
+      autoReelPill.className = "buff-pill autoreel-pill";
+      autoReelPill.innerHTML = `
+        <span class="pill-emoji">🎣</span>
+        <span class="pill-label">Auto-reel</span>
+        <span class="pill-time"></span>
+      `;
+      $buffRow.appendChild(autoReelPill);
+    }
+    const remaining = Math.max(0, ar.endsAt - now);
+    autoReelPill.style.setProperty("--fill", (remaining / ar.totalMs).toFixed(3));
+    const secs = Math.ceil(remaining / 1000);
+    const timeEl = autoReelPill.querySelector(".pill-time");
+    if (timeEl.textContent !== `${secs}s`) timeEl.textContent = `${secs}s`;
   }
 
   // ---------- Game logic ----------
@@ -739,6 +820,7 @@
         $castBtn.disabled = false;
         $pond.classList.remove("casting");
         $pond.style.animationDuration = "";
+        if (isAutoReelActive()) scheduleNextAutoCast();
       }, 260);
     }, duration);
   }
@@ -966,6 +1048,7 @@
     showEatNotification(fish, TIER_BUFF[fish.rarity], { isShiny, pearls: gained });
     renderCatches();
     updateBuffPills();
+    if (isShiny) startAutoReel();
     saveProgression();
   }
 
@@ -1005,14 +1088,16 @@
     state.eatingAll = true;
 
     // Figure out buffs to apply — one per type, take the highest-tier source.
-    const tierOrder = { common: 0, uncommon: 1, rare: 2, legendary: 3 };
+    const tierOrder = { common: 0, uncommon: 1, rare: 2, legendary: 3, mythic: 4 };
     const bestPerType = new Map(); // buffType -> { fish, tierRank }
     let totalPearls = 0;
+    let ateShiny = false;
 
     for (const [key, count] of entries) {
       const { fishId, isShiny } = parseInvKey(key);
       const fish = FISH.find(f => f.id === fishId);
       if (!fish) continue;
+      if (isShiny) ateShiny = true;
       const buff = TIER_BUFF[fish.rarity];
       const prev = bestPerType.get(buff.type);
       if (!prev || tierOrder[fish.rarity] > tierOrder[prev.fish.rarity]) {
@@ -1049,14 +1134,22 @@
     // After all particles land, apply buffs + pearls + clear inventory.
     const resolveAt = staggerDelay + 650;
     setTimeout(() => {
-      // Apply buffs (highest per type).
-      for (const { fish } of bestPerType.values()) applyTierBuff(fish);
+      // Stagger buff applications low→high rarity so the climax lands on the best buff.
+      const BUFF_STAGGER_MS = 180;
+      const buffList = [...bestPerType.values()]
+        .sort((a, b) => tierOrder[a.fish.rarity] - tierOrder[b.fish.rarity]);
+      buffList.forEach(({ fish }, i) => {
+        setTimeout(() => {
+          applyTierBuff(fish);
+          updateBuffPills();
+        }, i * BUFF_STAGGER_MS);
+      });
       // Grant pearls in one big pop near the counter.
       grantPearls(totalPearls, { atEl: $eatAllBtn });
       // Clear inventory.
       state.inventory.clear();
       renderCatches();
-      updateBuffPills();
+      if (ateShiny) startAutoReel();
       state.eatingAll = false;
       saveProgression();
     }, resolveAt);
