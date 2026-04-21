@@ -359,9 +359,12 @@ h2 {
   --surface-y: 32%;
   position: relative;
   width: 100%;
-  /* V6: taller (16:13 instead of 16:10) so the sky zone has real breathing room. */
-  aspect-ratio: 16 / 13;
-  max-height: 72vh;
+  /* V10: pond flexes to fill its panel so the catches panel no longer
+     leaves a dead white gap below the water. Clamps keep it sane on
+     very short/tall viewports. */
+  flex: 1 1 auto;
+  min-height: 440px;
+  max-height: 78vh;
   border-radius: var(--radius);
   overflow: hidden;
   /* Sky on top, water below — gradient changes color hard at the surface line. */
@@ -1675,7 +1678,7 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
 
 /* ---------- V8 tackle bag ---------- */
 /* The board drops from 3 columns to 2 once rods live in the bag. */
-.board { grid-template-columns: 1.4fr 1fr; }
+.board { grid-template-columns: 1.55fr 1fr; }
 
 .tackle-bag-chip {
   appearance: none;
