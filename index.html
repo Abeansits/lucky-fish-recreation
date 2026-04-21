@@ -69,18 +69,32 @@
       <div class="panel-header">
         <h2>Your Catches</h2>
       </div>
-      <button
-        id="eat-all-btn"
-        class="eat-all-btn hidden"
-        type="button"
-        aria-label="Hold to eat all"
-      >
-        <span class="eat-all-fill"></span>
-        <span class="eat-all-text">
-          <span class="eat-all-emoji">🍽️</span>
-          <span>Hold to Eat All</span>
-        </span>
-      </button>
+      <div id="bulk-actions" class="bulk-actions hidden">
+        <button
+          id="sell-all-btn"
+          class="bulk-btn sell-all-btn"
+          type="button"
+          aria-label="Hold to sell all"
+        >
+          <span class="bulk-fill"></span>
+          <span class="bulk-text">
+            <span class="bulk-emoji">🫧</span>
+            <span>Hold to Sell All</span>
+          </span>
+        </button>
+        <button
+          id="eat-all-btn"
+          class="bulk-btn eat-all-btn"
+          type="button"
+          aria-label="Hold to eat all"
+        >
+          <span class="bulk-fill"></span>
+          <span class="bulk-text">
+            <span class="bulk-emoji">🍽️</span>
+            <span>Hold to Eat All</span>
+          </span>
+        </button>
+      </div>
       <div id="catches" class="catches">
         <div class="empty-catches">No catches yet — give it a cast!</div>
       </div>

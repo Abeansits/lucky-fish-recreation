@@ -947,7 +947,18 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   padding: 24px 8px;
 }
 
+/* V10: each entry is a relative container so the swipe-behind hints can
+   sit under the draggable card. */
 .catch-entry {
+  position: relative;
+  border-radius: var(--radius-sm);
+  --swipe-progress: 0;
+  animation: entryIn 280ms cubic-bezier(.3,1.5,.5,1);
+  overflow: hidden;
+}
+.catch-entry .catch-card {
+  position: relative;
+  z-index: 2;
   display: grid;
   grid-template-columns: 8px 48px 1fr auto;
   align-items: center;
@@ -956,16 +967,52 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   background: #f8fbfd;
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-soft);
-  animation: entryIn 280ms cubic-bezier(.3,1.5,.5,1);
+  touch-action: pan-y;
+  will-change: transform;
+  user-select: none;
+  -webkit-user-select: none;
 }
-.catch-entry .catch-bar {
+.catch-entry .catch-card.dragging {
+  transition: none;
+  cursor: grabbing;
+}
+
+/* Swipe hints — hidden at rest, brighten as the card is dragged past them. */
+.catch-entry .catch-swipe-hint {
+  position: absolute;
+  top: 0; bottom: 0;
+  display: flex;
+  align-items: center;
+  font-weight: 900;
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+  color: #fff;
+  padding: 0 18px;
+  z-index: 1;
+  opacity: calc(0.2 + var(--swipe-progress, 0) * 1.3);
+  pointer-events: none;
+  text-shadow: 0 1px 0 rgba(0,0,0,0.18);
+}
+.catch-entry .catch-swipe-hint.sell {
+  right: 0;
+  background: linear-gradient(90deg, rgba(100,188,255,0) 0%, #2e9dea 60%, #1e7dc0 100%);
+  justify-content: flex-end;
+}
+.catch-entry .catch-swipe-hint.eat {
+  left: 0;
+  background: linear-gradient(90deg, #2f9a52 0%, #3fbc67 40%, rgba(63,188,103,0) 100%);
+  justify-content: flex-start;
+}
+.catch-entry.swiping-sell { box-shadow: inset 0 0 0 3px rgba(46, 157, 234, 0.5); }
+.catch-entry.swiping-eat  { box-shadow: inset 0 0 0 3px rgba(63, 188, 103, 0.5); }
+.catch-card .catch-bar {
   border-top-left-radius: var(--radius-sm);
   border-bottom-left-radius: var(--radius-sm);
 }
 .catch-bar {
   width: 100%;
   height: 100%;
-  min-height: 44px;
+  min-height: 48px;
   border-top-left-radius: var(--radius-sm);
   border-bottom-left-radius: var(--radius-sm);
 }
@@ -981,65 +1028,103 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
 .catch-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .catch-name { font-weight: 800; font-size: 0.95rem; }
 .catch-count { font-size: 0.8rem; color: var(--ink-soft); }
-.eat-btn {
+/* V10: each card has BOTH a sell and eat action, stacked vertically. */
+.catch-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+}
+.catch-btn {
   appearance: none;
   border: none;
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-radius: 999px;
-  background: linear-gradient(180deg, #ffb3b3 0%, #ff7a7a 100%);
-  color: #5a1b1b;
   font-weight: 800;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   cursor: pointer;
-  box-shadow: 0 3px 0 #c94444, 0 6px 12px rgba(201, 68, 68, 0.25);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  line-height: 1;
+  min-width: 72px;
   transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
 }
-.eat-btn:hover { filter: brightness(1.04); }
-.eat-btn:active { transform: scale(1.06, 0.88) translateY(1px); box-shadow: 0 1px 0 #c94444, 0 2px 6px rgba(201, 68, 68, 0.25); }
+.catch-btn.sell-btn {
+  background: linear-gradient(180deg, #a3d8ff 0%, #4ea9e6 100%);
+  color: #0d3b5a;
+  box-shadow: 0 3px 0 #1e77b4, 0 6px 12px rgba(30, 119, 180, 0.22);
+}
+.catch-btn.eat-btn {
+  background: linear-gradient(180deg, #ffb3b3 0%, #ff7a7a 100%);
+  color: #5a1b1b;
+  box-shadow: 0 3px 0 #c94444, 0 6px 12px rgba(201, 68, 68, 0.25);
+}
+.catch-btn:hover { filter: brightness(1.04); }
+.catch-btn.sell-btn:active { transform: scale(1.05, 0.9) translateY(1px); box-shadow: 0 1px 0 #1e77b4, 0 2px 6px rgba(30, 119, 180, 0.22); }
+.catch-btn.eat-btn:active  { transform: scale(1.05, 0.9) translateY(1px); box-shadow: 0 1px 0 #c94444, 0 2px 6px rgba(201, 68, 68, 0.25); }
+.catch-btn .catch-btn-icon { font-size: 0.95rem; }
+.catch-btn .catch-btn-val  { font-variant-numeric: tabular-nums; }
 
-/* --- Eat All --- */
-.eat-all-btn {
+/* V10: Sell-All + Eat-All live side-by-side. Each holds-to-confirm with a
+   fill wipe so kids can see the progress. */
+.bulk-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 10px 0;
+}
+.bulk-actions.hidden { display: none; }
+.bulk-btn {
   position: relative;
   appearance: none;
   border: none;
-  margin: 0 0 10px 0;
-  padding: 12px 18px;
+  padding: 12px 14px;
   border-radius: 14px;
-  background: linear-gradient(180deg, #ffd184 0%, #ff9f3e 100%);
-  color: #4a2300;
+  color: #1a1a1a;
   font: inherit;
   font-weight: 900;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   cursor: pointer;
   overflow: hidden;
-  box-shadow: 0 3px 0 #c46b10, 0 6px 12px rgba(196, 107, 16, 0.3);
-  transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
   user-select: none;
   -webkit-user-select: none;
   touch-action: manipulation;
 }
-.eat-all-btn.hidden { display: none; }
-.eat-all-btn:hover { filter: brightness(1.03); }
-.eat-all-btn:active { transform: translateY(1px); }
-.eat-all-fill {
+.bulk-btn:hover { filter: brightness(1.03); }
+.bulk-btn:active { transform: translateY(1px); }
+.sell-all-btn {
+  background: linear-gradient(180deg, #b8e2ff 0%, #58b3ea 100%);
+  color: #0c3752;
+  box-shadow: 0 3px 0 #1e77b4, 0 6px 12px rgba(30, 119, 180, 0.28);
+}
+.eat-all-btn {
+  background: linear-gradient(180deg, #ffd184 0%, #ff9f3e 100%);
+  color: #4a2300;
+  box-shadow: 0 3px 0 #c46b10, 0 6px 12px rgba(196, 107, 16, 0.3);
+}
+.bulk-fill {
   position: absolute;
   inset: 0 auto 0 0;
   width: 0%;
-  background: linear-gradient(90deg, rgba(255, 245, 200, 0.85), rgba(255, 200, 100, 0.65));
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.55));
   transition: width 80ms linear;
 }
-.eat-all-btn.holding .eat-all-fill { transition: width 500ms linear; width: 100%; }
-.eat-all-text {
+.bulk-btn.holding .bulk-fill { transition: width 500ms linear; width: 100%; }
+.bulk-text {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   z-index: 1;
+  white-space: nowrap;
 }
-.eat-all-emoji { font-size: 1.2rem; }
+.bulk-emoji { font-size: 1.15rem; }
 
 /* Cascade fish flying into the button */
 .flying-fish {
@@ -1395,6 +1480,48 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   padding: 6px 12px;
   background: #e7f8ea;
   border-radius: 999px;
+}
+
+/* V10 shop sections + rod cards + milestone-locked state. */
+.shop-section-header {
+  grid-column: 1 / -1;
+  font-weight: 900;
+  font-size: 1.05rem;
+  color: var(--ocean-deep);
+  padding: 6px 2px 2px;
+  letter-spacing: 0.01em;
+}
+.shop-card.rod-card .rod-shop-art {
+  font-size: 2.4rem;
+}
+.shop-card.rod-card .rod-shop-art .rod-art {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+}
+.shop-card-sub {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  margin-top: -4px;
+}
+.shop-card.milestone-locked {
+  opacity: 0.72;
+  background: linear-gradient(180deg, #f4f7fa 0%, #e9eef3 100%);
+}
+.shop-card.milestone-locked .rod-shop-art,
+.shop-card.milestone-locked .shop-card-emoji { filter: grayscale(0.75) brightness(0.94); }
+.shop-lock-line {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #4a5a68;
+  padding: 4px 10px;
+  background: #eef2f6;
+  border-radius: 999px;
+}
+.shop-lock-progress {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- Shiny styles --- */

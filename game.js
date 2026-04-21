@@ -50,37 +50,44 @@
   const TIER_COLOR  = { common: "#4caf50", uncommon: "#3a8dde", rare: "#a05ad8", legendary: "#f2b33a", mythic: "#d83bff" };
   const TIER_LABEL  = { common: "Common", uncommon: "Uncommon", rare: "Rare", legendary: "Legendary", mythic: "Mythic" };
 
+  // V10 redesign: rods are no longer auto-unlocked. Most need just pearls;
+  // mid + top rods need a catch milestone unlocked before you can buy. This
+  // turns "eat vs sell" into a real strategic choice — sell to afford the
+  // next rod, eat to buff the current run.
   const RODS = [
     {
       id: "basic", name: "Trusty Stick", emoji: "🪵",
       desc: "A reliable starter rod.", luck: 1.0,
-      unlock: null, // always available
+      unlock: null, price: 0, // always available, never charged
     },
     {
       id: "lucky", name: "Lucky Rod", emoji: "🍀",
       desc: "Nudges rare catches your way.", luck: 1.5,
-      unlock: { totalCatches: 10, label: "Catch 10 fish" },
+      unlock: null, price: 50,
     },
     {
       id: "hunter", name: "Rare Hunter", emoji: "🎯",
       desc: "Chases rarer fish hard.", luck: 2.0,
-      unlock: { totalCatches: 25, rareCatches: 3, label: "Catch 25 fish & 3 rares" },
+      unlock: { rareCatches: 3, label: "Catch 3 rare fish" },
+      price: 200,
     },
     {
       id: "legend", name: "Legend Reeler", emoji: "🌟",
       desc: "Strong pull on rare & legendary.", luck: 3.0,
-      unlock: { totalCatches: 60, legendaryCatches: 2, label: "Catch 60 fish & 2 legendaries" },
+      unlock: { legendaryCatches: 2, label: "Catch 2 legendaries" },
+      price: 500,
     },
-    // Ultra-rare endgame rods. Luck applies to rare + legendary + mythic.
     {
       id: "moonlit", name: "Moonlit Reel", emoji: "🌙",
       desc: "Pulls from deeper waters.", luck: 4.0,
-      unlock: { totalCatches: 100, legendaryCatches: 5, label: "Catch 100 fish & 5 legendaries" },
+      unlock: { legendaryCatches: 5, label: "Catch 5 legendaries" },
+      price: 1200,
     },
     {
       id: "starcatcher", name: "Starcatcher", emoji: "⭐",
       desc: "Catches myths.", luck: 5.0,
-      unlock: { totalCatches: 200, mythicCatches: 3, label: "Catch 200 fish & 3 mythics" },
+      unlock: { mythicCatches: 2, label: "Catch 2 mythics" },
+      price: 3000,
     },
   ];
 
@@ -162,15 +169,22 @@
   ];
 
   // ---------- Persistence ----------
-  const STORAGE_KEY = "luckyFish.v3";
-  const LEGACY_KEYS = ["luckyFish.v2"]; // migrate older saves forward
+  // V10 redesign: eat vs sell split + rod store rework. Bumping the key
+  // deliberately wipes V3 saves so the old pearls/unlocks can't leak into
+  // the new economy. No legacy migration on purpose.
+  const STORAGE_KEY = "luckyFish.v4";
+  const LEGACY_KEYS = [];
 
   function freshProgression() {
     return {
       totals: { all: 0, common: 0, uncommon: 0, rare: 0, legendary: 0, mythic: 0, shinies: 0, bySpecies: {} },
       discovered: {}, // speciesId -> firstCaughtAt (ms epoch)
       shinyDiscovered: {}, // speciesId -> firstCaughtAt
-      unlocks: { basic: true, lucky: false, hunter: false, legend: false, moonlit: false, starcatcher: false },
+      // V10: unlocks now only contains rods the player has BOUGHT. Basic is free.
+      unlocks: { basic: true },
+      // V10: track which rod milestones we've already announced so we don't
+      // spam the "rod unlocked for purchase" notification more than once.
+      rodMilestoneSeen: {},
       selectedRod: "basic",
       milestonesSeen: { firstLegendary: false, albumComplete: false, firstShiny: false, allDecorations: false, firstMythic: false },
       lastGiftDate: null,
@@ -200,6 +214,7 @@
         discovered: { ...(parsed.discovered || {}) },
         shinyDiscovered: { ...(parsed.shinyDiscovered || {}) },
         unlocks: { ...fresh.unlocks, ...(parsed.unlocks || {}) },
+        rodMilestoneSeen: { ...(parsed.rodMilestoneSeen || {}) },
         selectedRod: parsed.selectedRod || "basic",
         milestonesSeen: { ...fresh.milestonesSeen, ...(parsed.milestonesSeen || {}) },
         lastGiftDate: parsed.lastGiftDate || null,
@@ -264,6 +279,8 @@
   const $shopPearls = document.getElementById("shop-pearls");
   const $decorations = document.getElementById("decorations");
   const $eatAllBtn = document.getElementById("eat-all-btn");
+  const $sellAllBtn = document.getElementById("sell-all-btn");
+  const $bulkActions = document.getElementById("bulk-actions");
   const $bubbles = document.getElementById("bubbles");
   const $castReel = document.getElementById("cast-reel");
   const $castReelStrip = document.getElementById("cast-reel-strip");
@@ -458,6 +475,14 @@
     playFile("eat");
   }
 
+  // V10: light "ka-ching" for selling — no sample file, just a short chime
+  // so it sits distinct from the chomp sound.
+  function playSellSound() {
+    if (audioMuted()) return;
+    blip({ freq: 880, slideTo: 1320, duration: 0.18, type: "triangle", vol: 0.13, attack: 0.005, release: 0.12 });
+    blip({ freq: 1320, slideTo: 1760, duration: 0.16, type: "sine",     vol: 0.09, attack: 0.015, release: 0.12, at: 0.05 });
+  }
+
   // Ascending chirp when a buff pill appears — pitch + body scale with rarity
   // so Eat-All's three-pop climax audibly peaks on the best buff. Respects mute.
   function playBuffAppear(rarity) {
@@ -514,8 +539,8 @@
 
   // ---------- Rendering ----------
 
+  // V10: "unlocked" now means "owned" (bought in shop or free-basic).
   function isRodUnlocked(rod) {
-    if (!rod.unlock) return true;
     return !!prog.unlocks[rod.id];
   }
 
@@ -543,19 +568,24 @@
       btn.dataset.rodId = rod.id;
       btn.disabled = !unlocked;
 
-      const prog_ = rodUnlockProgress(rod);
-      const lockLine = unlocked
-        ? `${rod.desc} <em>(${rod.luck.toFixed(1)}× luck)</em>`
-        : `🔒 ${prog_.label} · ` + prog_.need
-            .map(n => `${Math.min(n.current, n.target)}/${n.target} ${n.noun}`)
-            .join(", ");
+      // V10: unowned rods just nudge toward the shop; milestone still shown.
+      let line;
+      if (unlocked) {
+        line = `${rod.desc} <em>(${rod.luck.toFixed(1)}× luck)</em>`;
+      } else if (rod.unlock && !rodMilestoneMet(rod)) {
+        const p = rodUnlockProgress(rod);
+        line = `🔒 ${p.label} · ` + p.need
+          .map(n => `${Math.min(n.current, n.target)}/${n.target} ${n.noun}`)
+          .join(", ");
+      } else {
+        line = `🏪 Buy in shop · 🫧 ${rod.price}`;
+      }
 
       btn.innerHTML = `
         <span class="rod-emoji">${rodArt(rod)}</span>
         <span class="rod-body">
           <span class="rod-name">${rod.name}</span>
-          <span class="rod-desc">${lockLine}</span>
-          ${!unlocked ? `<span class="rod-bar"><span class="rod-bar-fill" style="width:${(prog_.ratio * 100).toFixed(0)}%"></span></span>` : ""}
+          <span class="rod-desc">${line}</span>
         </span>
       `;
       if (unlocked) {
@@ -581,15 +611,18 @@
   // See makeModal() below — tackle bag / album / shop / achievements / settings
   // all share the same show/hide logic plus per-modal on-open hooks.
 
+  // V10: catch cards now expose BOTH a sell and eat action, plus drag-to-commit.
+  // Drag the card left → sells (pearls, no buff). Drag right → eats (buff, no
+  // pearls). Tap either button does the same. The buttons keep us toddler-safe;
+  // the swipe adds speed for older kids.
   function renderCatches() {
     const entries = [...state.inventory.entries()].filter(([, n]) => n > 0);
     if (entries.length === 0) {
       $catches.innerHTML = `<div class="empty-catches">No catches yet — give it a cast!</div>`;
-      $eatAllBtn.classList.add("hidden");
+      $bulkActions.classList.add("hidden");
       return;
     }
-    // Shinies first, then legendary→common, then by name.
-    const rarityOrder = { legendary: 0, rare: 1, uncommon: 2, common: 3 };
+    const rarityOrder = { mythic: -1, legendary: 0, rare: 1, uncommon: 2, common: 3 };
     entries.sort((a, b) => {
       const pa = parseInvKey(a[0]);
       const pb = parseInvKey(b[0]);
@@ -603,28 +636,103 @@
     for (const [key, count] of entries) {
       const { fishId, isShiny } = parseInvKey(key);
       const fish = FISH.find(f => f.id === fishId);
+      const sellValue = pearlsForCatch(fish, isShiny);
       const entry = document.createElement("div");
       entry.className = "catch-entry" + (isShiny ? " is-shiny" : "");
       entry.dataset.entryKey = key;
       const starPrefix = isShiny ? '<span class="catch-star">✨</span> ' : "";
       const nameLabel = `${starPrefix}${isShiny ? "Shiny " : ""}${fish.name}`;
       entry.innerHTML = `
-        <div class="catch-bar rarity-${fish.rarity}"></div>
-        <div class="catch-emoji ${isShiny ? "shiny" : ""}">${fishArt(fish, { isShiny })}</div>
-        <div class="catch-info">
-          <span class="catch-name">${nameLabel}</span>
-          <span class="catch-count">${TIER_LABEL[fish.rarity]} · x${count}</span>
+        <span class="catch-swipe-hint sell">🫧 Sell</span>
+        <span class="catch-swipe-hint eat">🍽️ Eat</span>
+        <div class="catch-card">
+          <div class="catch-bar rarity-${fish.rarity}"></div>
+          <div class="catch-emoji ${isShiny ? "shiny" : ""}">${fishArt(fish, { isShiny })}</div>
+          <div class="catch-info">
+            <span class="catch-name">${nameLabel}</span>
+            <span class="catch-count">${TIER_LABEL[fish.rarity]} · x${count}</span>
+          </div>
+          <div class="catch-actions">
+            <button class="catch-btn sell-btn" data-key="${key}" aria-label="Sell for ${sellValue} pearls">
+              <span class="catch-btn-icon">🫧</span><span class="catch-btn-val">${sellValue.toLocaleString()}</span>
+            </button>
+            <button class="catch-btn eat-btn" data-key="${key}" aria-label="Eat for tier buff">
+              🍽️ Eat
+            </button>
+          </div>
         </div>
-        <button class="eat-btn" data-eat-key="${key}">Eat</button>
       `;
-      entry.querySelector(".eat-btn").addEventListener("click", () => eatFish(fishId, isShiny));
+      const card = entry.querySelector(".catch-card");
+      entry.querySelector(".sell-btn").addEventListener("click", (e) => {
+        e.stopPropagation();
+        sellFish(fishId, isShiny);
+      });
+      entry.querySelector(".eat-btn").addEventListener("click", (e) => {
+        e.stopPropagation();
+        eatFish(fishId, isShiny);
+      });
+      attachCatchSwipe(entry, card, fishId, isShiny);
       $catches.appendChild(entry);
     }
 
-    // Show Eat All only when there's enough to make batching meaningful.
     const totalFish = entries.reduce((s, [, n]) => s + n, 0);
-    if (totalFish >= 2) $eatAllBtn.classList.remove("hidden");
-    else $eatAllBtn.classList.add("hidden");
+    if (totalFish >= 2) $bulkActions.classList.remove("hidden");
+    else $bulkActions.classList.add("hidden");
+  }
+
+  // Drag-to-commit on a catch card. Past the threshold either way, commit the
+  // action on release. Snap back if short. Buttons inside the card still fire
+  // their own click — we just skip drag-tracking when the pointerdown started
+  // on a button.
+  const SWIPE_COMMIT_RATIO = 0.45; // fraction of card width
+  function attachCatchSwipe(entry, card, fishId, isShiny) {
+    let startX = 0, dx = 0, dragging = false, committed = false;
+    let pointerId = null;
+    card.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button")) return; // let button click handle it
+      dragging = true;
+      committed = false;
+      startX = e.clientX;
+      dx = 0;
+      pointerId = e.pointerId;
+      try { card.setPointerCapture(pointerId); } catch {}
+      card.classList.add("dragging");
+    });
+    card.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      dx = e.clientX - startX;
+      card.style.transform = `translateX(${dx}px)`;
+      const width = card.offsetWidth || 240;
+      const ratio = Math.min(1, Math.abs(dx) / width);
+      entry.classList.toggle("swiping-sell", dx < -12);
+      entry.classList.toggle("swiping-eat",  dx > 12);
+      entry.style.setProperty("--swipe-progress", ratio.toFixed(3));
+    });
+    const finish = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      try { card.releasePointerCapture(pointerId); } catch {}
+      const width = card.offsetWidth || 240;
+      const threshold = width * SWIPE_COMMIT_RATIO;
+      if (!committed && dx <= -threshold) {
+        committed = true;
+        sellFish(fishId, isShiny);
+      } else if (!committed && dx >= threshold) {
+        committed = true;
+        eatFish(fishId, isShiny);
+      } else {
+        // Snap back
+        card.style.transition = "transform 180ms cubic-bezier(.3,1.5,.5,1)";
+        card.style.transform = "translateX(0)";
+        setTimeout(() => { card.style.transition = ""; }, 200);
+      }
+      card.classList.remove("dragging");
+      entry.classList.remove("swiping-sell", "swiping-eat");
+      entry.style.setProperty("--swipe-progress", "0");
+      dx = 0;
+    };
+    card.addEventListener("pointerup", finish);
+    card.addEventListener("pointercancel", finish);
   }
 
   function fishStyle(fish) {
@@ -963,21 +1071,26 @@
     prog.totals[fish.rarity] = (prog.totals[fish.rarity] || 0) + 1;
     if (isShiny) prog.totals.shinies = (prog.totals.shinies || 0) + 1;
     prog.totals.bySpecies[fish.id] = (prog.totals.bySpecies[fish.id] || 0) + 1;
-    // Rod unlock checks
+    // V10: rods are bought in the shop, not auto-unlocked. We just nudge the
+    // user when a catch first clears a rod's milestone so they know to check
+    // the shop.
     for (const rod of RODS) {
-      if (rod.unlock && !prog.unlocks[rod.id]) {
-        const u = rod.unlock;
-        const ok =
-          (u.totalCatches == null || prog.totals.all >= u.totalCatches) &&
-          (u.rareCatches == null || prog.totals.rare >= u.rareCatches) &&
-          (u.legendaryCatches == null || prog.totals.legendary >= u.legendaryCatches) &&
-          (u.mythicCatches == null || (prog.totals.mythic || 0) >= u.mythicCatches);
-        if (ok) {
-          prog.unlocks[rod.id] = true;
-          showRodUnlock(rod);
-        }
+      if (rod.unlock && !prog.rodMilestoneSeen[rod.id] && rodMilestoneMet(rod)) {
+        prog.rodMilestoneSeen[rod.id] = true;
+        showRodUnlockedForPurchase(rod);
       }
     }
+  }
+
+  function rodMilestoneMet(rod) {
+    if (!rod.unlock) return true;
+    const u = rod.unlock;
+    return (
+      (u.totalCatches == null || prog.totals.all >= u.totalCatches) &&
+      (u.rareCatches == null || prog.totals.rare >= u.rareCatches) &&
+      (u.legendaryCatches == null || prog.totals.legendary >= u.legendaryCatches) &&
+      (u.mythicCatches == null || (prog.totals.mythic || 0) >= u.mythicCatches)
+    );
   }
 
   function checkMilestones(fish, isShiny) {
@@ -1036,6 +1149,8 @@
     return FISH[Math.abs(h) % FISH.length].id;
   }
 
+  // V10: eating gives ONLY the tier buff (no pearls). Shiny still triggers the
+  // 20-second auto-reel. The strategic flip-side to selling.
   function eatFish(fishId, isShiny) {
     const key = invKey(fishId, isShiny);
     const count = state.inventory.get(key) || 0;
@@ -1043,16 +1158,31 @@
     const fish = FISH.find(f => f.id === fishId);
     state.inventory.set(key, count - 1);
 
-    const gained = pearlsForCatch(fish, isShiny);
-    grantPearls(gained, { atEl: document.querySelector(`[data-eat-key="${key}"]`) || $catches });
-
     applyTierBuff(fish);
 
     playEatSound();
-    showEatNotification(fish, TIER_BUFF[fish.rarity], { isShiny, pearls: gained });
+    showEatNotification(fish, TIER_BUFF[fish.rarity], { isShiny });
     renderCatches();
     updateBuffPills();
     if (isShiny) startAutoReel();
+    saveProgression();
+  }
+
+  // V10: selling gives ONLY pearls (no buff, no auto-reel on shiny — just
+  // fat pearl payout). The economic path; money for rods + decorations.
+  function sellFish(fishId, isShiny) {
+    const key = invKey(fishId, isShiny);
+    const count = state.inventory.get(key) || 0;
+    if (count <= 0) return;
+    const fish = FISH.find(f => f.id === fishId);
+    state.inventory.set(key, count - 1);
+
+    const gained = pearlsForCatch(fish, isShiny);
+    const srcEl = document.querySelector(`[data-entry-key="${key}"]`) || $catches;
+    grantPearls(gained, { atEl: srcEl });
+    playSellSound();
+    showSellNotification(fish, { isShiny, pearls: gained });
+    renderCatches();
     saveProgression();
   }
 
@@ -1077,48 +1207,28 @@
   function renderPearls() {
     $pearls.querySelector(".pearls-count").textContent = prog.pearls.toLocaleString();
     $pearls.classList.remove("popping");
-    // Force reflow to restart the animation
     void $pearls.offsetWidth;
     $pearls.classList.add("popping");
     if (state.shopOpen) renderShop();
+    // V10: the "Next rod" goal bar shows pearl progress toward the next
+    // unlocked-but-unpaid rod, so it needs to refresh as pearls move.
+    renderNextGoal();
   }
 
-  // ---------- Eat All ----------
+  // ---------- Bulk: Eat All / Sell All ----------
 
-  function eatAll() {
-    if (state.eatingAll) return;
-    const entries = [...state.inventory.entries()].filter(([, n]) => n > 0);
-    if (entries.length === 0) return;
-    state.eatingAll = true;
+  const TIER_ORDER = { common: 0, uncommon: 1, rare: 2, legendary: 3, mythic: 4 };
 
-    // Figure out buffs to apply — one per type, take the highest-tier source.
-    const tierOrder = { common: 0, uncommon: 1, rare: 2, legendary: 3, mythic: 4 };
-    const bestPerType = new Map(); // buffType -> { fish, tierRank }
-    let totalPearls = 0;
-    let ateShiny = false;
-
-    for (const [key, count] of entries) {
-      const { fishId, isShiny } = parseInvKey(key);
-      const fish = FISH.find(f => f.id === fishId);
-      if (!fish) continue;
-      if (isShiny) ateShiny = true;
-      const buff = TIER_BUFF[fish.rarity];
-      const prev = bestPerType.get(buff.type);
-      if (!prev || tierOrder[fish.rarity] > tierOrder[prev.fish.rarity]) {
-        bestPerType.set(buff.type, { fish, tierRank: tierOrder[fish.rarity] });
-      }
-      totalPearls += pearlsForCatch(fish, isShiny) * count;
-    }
-
-    // Create fly-in animations, one per entry (count shown on the label).
+  // Shared "fly every fish to a target" effect. Returns the total delay before
+  // all particles have finished.
+  function flyAllEntriesTo(entries, targetEl, opts = {}) {
+    const { sfx = null } = opts;
     const catchesRect = $catches.getBoundingClientRect();
-    const eatAllRect = $eatAllBtn.getBoundingClientRect();
-    const targetX = eatAllRect.left + eatAllRect.width / 2;
-    const targetY = eatAllRect.top + eatAllRect.height / 2;
-
+    const targetRect = targetEl.getBoundingClientRect();
+    const targetX = targetRect.left + targetRect.width / 2;
+    const targetY = targetRect.top + targetRect.height / 2;
     let staggerDelay = 0;
     const perItemDelay = 70;
-
     for (const [key, count] of entries) {
       const { fishId, isShiny } = parseInvKey(key);
       const fish = FISH.find(f => f.id === fishId);
@@ -1127,30 +1237,51 @@
       const rect = entryEl ? entryEl.getBoundingClientRect() : catchesRect;
       const startX = rect.left + 50;
       const startY = rect.top + rect.height / 2;
-
       setTimeout(() => {
         flyingFish(fish, isShiny, startX, startY, targetX, targetY, count);
-        playCrunchCascade(entries.length > 3 ? 0.8 : 1.0);
+        if (sfx) sfx(entries.length);
       }, staggerDelay);
       staggerDelay += perItemDelay;
     }
+    return staggerDelay + 650;
+  }
 
-    // After all particles land, apply buffs + pearls + clear inventory.
-    const resolveAt = staggerDelay + 650;
+  function eatAll() {
+    if (state.eatingAll) return;
+    const entries = [...state.inventory.entries()].filter(([, n]) => n > 0);
+    if (entries.length === 0) return;
+    state.eatingAll = true;
+
+    // One buff per type; highest-rarity source wins.
+    const bestPerType = new Map();
+    let ateShiny = false;
+    for (const [key] of entries) {
+      const { fishId, isShiny } = parseInvKey(key);
+      const fish = FISH.find(f => f.id === fishId);
+      if (!fish) continue;
+      if (isShiny) ateShiny = true;
+      const buff = TIER_BUFF[fish.rarity];
+      const prev = bestPerType.get(buff.type);
+      if (!prev || TIER_ORDER[fish.rarity] > TIER_ORDER[prev.fish.rarity]) {
+        bestPerType.set(buff.type, { fish });
+      }
+    }
+
+    const resolveAt = flyAllEntriesTo(entries, $eatAllBtn, {
+      sfx: (n) => playCrunchCascade(n > 3 ? 0.8 : 1.0),
+    });
+
     setTimeout(() => {
-      // Stagger buff applications low→high rarity so the climax lands on the best buff.
+      // Stagger buff applications low→high rarity so the climax peaks on best.
       const BUFF_STAGGER_MS = 180;
       const buffList = [...bestPerType.values()]
-        .sort((a, b) => tierOrder[a.fish.rarity] - tierOrder[b.fish.rarity]);
+        .sort((a, b) => TIER_ORDER[a.fish.rarity] - TIER_ORDER[b.fish.rarity]);
       buffList.forEach(({ fish }, i) => {
         setTimeout(() => {
           applyTierBuff(fish);
           updateBuffPills();
         }, i * BUFF_STAGGER_MS);
       });
-      // Grant pearls in one big pop near the counter.
-      grantPearls(totalPearls, { atEl: $eatAllBtn });
-      // Clear inventory.
       state.inventory.clear();
       renderCatches();
       if (ateShiny) startAutoReel();
@@ -1158,7 +1289,6 @@
       saveProgression();
     }, resolveAt);
 
-    // Eat All summary toast
     const types = [...bestPerType.values()].map(b => TIER_BUFF[b.fish.rarity].label).join(" · ");
     const summary = document.createElement("div");
     summary.className = "notif celebrate rarity-legendary";
@@ -1166,7 +1296,45 @@
       <div class="notif-emoji">🍽️</div>
       <div class="notif-text">
         <span class="notif-title">Chomped the lot!</span>
-        <span class="notif-sub">+${totalPearls} 🫧 · ${types || "no buffs"}</span>
+        <span class="notif-sub">${types || "no buffs"}</span>
+      </div>
+    `;
+    pushNotif(summary, 2500);
+  }
+
+  function sellAll() {
+    if (state.eatingAll) return; // reuse the "bulk in progress" lock
+    const entries = [...state.inventory.entries()].filter(([, n]) => n > 0);
+    if (entries.length === 0) return;
+    state.eatingAll = true;
+
+    let totalPearls = 0;
+    for (const [key, count] of entries) {
+      const { fishId, isShiny } = parseInvKey(key);
+      const fish = FISH.find(f => f.id === fishId);
+      if (!fish) continue;
+      totalPearls += pearlsForCatch(fish, isShiny) * count;
+    }
+
+    const resolveAt = flyAllEntriesTo(entries, $sellAllBtn, {
+      sfx: () => playSellSound(),
+    });
+
+    setTimeout(() => {
+      grantPearls(totalPearls, { atEl: $sellAllBtn });
+      state.inventory.clear();
+      renderCatches();
+      state.eatingAll = false;
+      saveProgression();
+    }, resolveAt);
+
+    const summary = document.createElement("div");
+    summary.className = "notif celebrate rarity-uncommon";
+    summary.innerHTML = `
+      <div class="notif-emoji">🫧</div>
+      <div class="notif-text">
+        <span class="notif-title">Sold the lot!</span>
+        <span class="notif-sub">+${totalPearls.toLocaleString()} 🫧</span>
       </div>
     `;
     pushNotif(summary, 2500);
@@ -1272,18 +1440,34 @@
     pushNotif(n, NOTIF_HOLD.big); // V6: first-catch is a "big event"
   }
 
-  function showRodUnlock(rod) {
+  // V10: two flavors of rod notification. First-time milestone nudges players
+  // toward the shop; actual purchase celebrates.
+  function showRodUnlockedForPurchase(rod) {
+    const n = document.createElement("div");
+    n.className = "notif celebrate rarity-rare";
+    n.innerHTML = `
+      <div class="notif-emoji">${rodArt(rod)}</div>
+      <div class="notif-text">
+        <span class="notif-hat">🏪 New in the shop!</span>
+        <span class="notif-title">${rod.name}</span>
+        <span class="notif-sub">Unlocked — buy for 🫧 ${rod.price.toLocaleString()}</span>
+      </div>
+    `;
+    pushNotif(n, NOTIF_HOLD.big);
+  }
+
+  function showRodPurchase(rod) {
     const n = document.createElement("div");
     n.className = "notif celebrate rarity-legendary";
     n.innerHTML = `
       <div class="notif-emoji">${rodArt(rod)}</div>
       <div class="notif-text">
-        <span class="notif-hat">🔓 New rod unlocked!</span>
+        <span class="notif-hat">🎣 New rod!</span>
         <span class="notif-title">${rod.name}</span>
         <span class="notif-sub">${rod.desc}</span>
       </div>
     `;
-    pushNotif(n, NOTIF_HOLD.big); // V6: rod unlock is a "big event"
+    pushNotif(n, NOTIF_HOLD.big);
   }
 
   // V6: milestones can be routine ("pond master! you placed every decoration")
@@ -1321,12 +1505,28 @@
     pushNotif(n, NOTIF_HOLD.regular); // routine bonus
   }
 
-  function showEatNotification(fish, buffTemplate, { isShiny = false, pearls = 0 } = {}) {
+  function showEatNotification(fish, buffTemplate, { isShiny = false } = {}) {
     const n = document.createElement("div");
     n.className = `notif rarity-${fish.rarity}` + (isShiny ? " celebrate" : "");
     const emojiCls = isShiny ? "shiny" : "";
     const title = isShiny ? `Yum! Shiny ${fish.name} ✨` : `Yum! ${fish.name}`;
-    const sub = `${buffTemplate.label} for ${buffTemplate.duration}s${pearls ? ` · +${pearls} 🫧` : ""}`;
+    const sub = `${buffTemplate.label} for ${buffTemplate.duration}s`;
+    n.innerHTML = `
+      <div class="notif-emoji ${emojiCls}">${fishArt(fish, { cls: emojiCls, isShiny })}</div>
+      <div class="notif-text">
+        <span class="notif-title">${title}</span>
+        <span class="notif-sub">${sub}</span>
+      </div>
+    `;
+    pushNotif(n, NOTIF_HOLD.regular);
+  }
+
+  function showSellNotification(fish, { isShiny = false, pearls = 0 } = {}) {
+    const n = document.createElement("div");
+    n.className = `notif rarity-${fish.rarity}` + (isShiny ? " celebrate" : "");
+    const emojiCls = isShiny ? "shiny" : "";
+    const title = isShiny ? `Sold a Shiny ${fish.name} ✨` : `Sold ${fish.name}`;
+    const sub = `+${pearls.toLocaleString()} 🫧`;
     n.innerHTML = `
       <div class="notif-emoji ${emojiCls}">${fishArt(fish, { cls: emojiCls, isShiny })}</div>
       <div class="notif-text">
@@ -1345,7 +1545,7 @@
       <div class="notif-text">
         <span class="notif-hat">✨ ${isFirstShiny ? "FIRST SHINY" : "SHINY CATCH"} · 1 IN ${SHINY_DENOM.toLocaleString()}</span>
         <span class="notif-title big">Shiny ${fish.name}!</span>
-        <span class="notif-sub">${isFirstShiny ? "Added to your Album" : TIER_LABEL[fish.rarity]} · ${pearlsForCatch(fish, true)} 🫧 on eat</span>
+        <span class="notif-sub">${isFirstShiny ? "Added to your Album" : TIER_LABEL[fish.rarity]} · sells for ${pearlsForCatch(fish, true).toLocaleString()} 🫧</span>
       </div>
     `;
     // V6: first shiny ever = headline banner (dismiss-on-tap); repeat shinies
@@ -1717,22 +1917,32 @@
   // ---------- Next Goal strip ----------
 
   function renderNextGoal() {
-    const nextRod = RODS.find(r => r.unlock && !prog.unlocks[r.id]);
+    // V10: the progression goal is "next rod to own". For rods with a milestone
+    // we show catch progress; for pure-pay rods we show pearl progress.
+    const nextRod = RODS.find(r => r.id !== "basic" && !prog.unlocks[r.id]);
     const albumRemaining = FISH.length - Object.keys(prog.discovered).length;
 
     if (nextRod) {
       const p = rodUnlockProgress(nextRod);
-      const currentDesc = p.need
-        .map(n => `${Math.min(n.current, n.target)}/${n.target}`)
-        .join(" · ");
+      let label, ratio;
+      if (p && !rodMilestoneMet(nextRod)) {
+        const currentDesc = p.need
+          .map(n => `${Math.min(n.current, n.target)}/${n.target}`)
+          .join(" · ");
+        label = `${nextRod.name} — ${currentDesc}`;
+        ratio = p.ratio;
+      } else {
+        label = `${nextRod.name} — 🫧 ${Math.min(prog.pearls, nextRod.price).toLocaleString()}/${nextRod.price.toLocaleString()}`;
+        ratio = Math.min(1, prog.pearls / nextRod.price);
+      }
       $nextGoal.className = "next-goal";
       $nextGoal.innerHTML = `
         <span class="next-goal-emoji">${rodArt(nextRod)}</span>
         <span class="next-goal-text">
           <span class="next-goal-head">Next rod</span>
-          <span class="next-goal-label">${nextRod.name} — ${currentDesc}</span>
+          <span class="next-goal-label">${label}</span>
         </span>
-        <span class="next-goal-bar"><span class="next-goal-bar-fill" style="width:${(p.ratio * 100).toFixed(0)}%"></span></span>
+        <span class="next-goal-bar"><span class="next-goal-bar-fill" style="width:${(ratio * 100).toFixed(0)}%"></span></span>
       `;
     } else if (albumRemaining > 0) {
       const got = Object.keys(prog.discovered).length;
@@ -1840,6 +2050,55 @@
   function renderShop() {
     $shopPearls.textContent = prog.pearls.toLocaleString();
     $shopGrid.innerHTML = "";
+
+    // V10: rods come first — the progression economy lives here now. Shop
+    // shows every rod (minus the free Trusty Stick) with three possible
+    // states: locked (milestone not met), for-sale (buy now), or owned.
+    const rodHeader = document.createElement("div");
+    rodHeader.className = "shop-section-header";
+    rodHeader.textContent = "🎣 Rods";
+    $shopGrid.appendChild(rodHeader);
+
+    for (const rod of RODS) {
+      if (rod.id === "basic") continue; // always-owned starter, no need to show
+      const owned = !!prog.unlocks[rod.id];
+      const milestoneMet = rodMilestoneMet(rod);
+      const canAfford = prog.pearls >= rod.price;
+      const card = document.createElement("div");
+      card.className = "shop-card rod-card" +
+        (owned ? " owned" : (!milestoneMet ? " milestone-locked" : (canAfford ? "" : " locked")));
+
+      let footer;
+      if (owned) {
+        footer = `<span class="shop-owned-tag">✓ Owned</span>`;
+      } else if (!milestoneMet) {
+        const p = rodUnlockProgress(rod);
+        const progressLine = p.need
+          .map(n => `${Math.min(n.current, n.target)}/${n.target} ${n.noun}`)
+          .join(", ");
+        footer = `<span class="shop-lock-line">🔒 ${p.label}</span>
+                  <span class="shop-lock-progress">${progressLine}</span>`;
+      } else {
+        footer = `<span class="shop-card-price">🫧 ${rod.price.toLocaleString()}</span>
+                  <button class="shop-buy" ${canAfford ? "" : "disabled"} data-rod="${rod.id}">Buy</button>`;
+      }
+
+      card.innerHTML = `
+        <span class="shop-card-emoji rod-shop-art">${rodArt(rod)}</span>
+        <span class="shop-card-name">${rod.name}</span>
+        <span class="shop-card-sub">${rod.luck.toFixed(1)}× luck</span>
+        ${footer}
+      `;
+      const buy = card.querySelector(".shop-buy");
+      if (buy) buy.addEventListener("click", () => buyRod(rod.id));
+      $shopGrid.appendChild(card);
+    }
+
+    const decoHeader = document.createElement("div");
+    decoHeader.className = "shop-section-header";
+    decoHeader.textContent = "🎀 Pond Decorations";
+    $shopGrid.appendChild(decoHeader);
+
     for (const deco of DECORATIONS) {
       const owned = !!prog.decorationsOwned[deco.id];
       const canAfford = prog.pearls >= deco.price;
@@ -1857,6 +2116,20 @@
       if (buy) buy.addEventListener("click", () => buyDecoration(deco.id));
       $shopGrid.appendChild(card);
     }
+  }
+
+  function buyRod(id) {
+    const rod = RODS.find(r => r.id === id);
+    if (!rod || prog.unlocks[id]) return;
+    if (!rodMilestoneMet(rod)) return;
+    if (prog.pearls < rod.price) return;
+    prog.pearls -= rod.price;
+    prog.unlocks[id] = true;
+    renderPearls();
+    renderRods();
+    renderShop();
+    showRodPurchase(rod);
+    saveProgression();
   }
 
   function buyDecoration(id) {
@@ -2095,25 +2368,30 @@
       for (const m of openModals) if (state[m.stateKey]) m.close();
     });
 
-    // Eat-All press-and-hold (500ms, per Codex — prevents accidental kid taps).
-    let holdTimer = null;
-    const startHold = (e) => {
-      e.preventDefault();
-      if (state.eatingAll || $eatAllBtn.classList.contains("hidden")) return;
-      $eatAllBtn.classList.add("holding");
-      holdTimer = setTimeout(() => {
-        $eatAllBtn.classList.remove("holding");
-        eatAll();
-      }, 500);
-    };
-    const cancelHold = () => {
-      $eatAllBtn.classList.remove("holding");
-      if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-    };
-    $eatAllBtn.addEventListener("pointerdown", startHold);
-    $eatAllBtn.addEventListener("pointerup", cancelHold);
-    $eatAllBtn.addEventListener("pointerleave", cancelHold);
-    $eatAllBtn.addEventListener("pointercancel", cancelHold);
+    // Bulk press-and-hold (500ms, per Codex — prevents accidental kid taps).
+    // Shared across Sell-All and Eat-All so behavior stays symmetrical.
+    function wireBulkHold(btn, action) {
+      let holdTimer = null;
+      const start = (e) => {
+        e.preventDefault();
+        if (state.eatingAll || $bulkActions.classList.contains("hidden")) return;
+        btn.classList.add("holding");
+        holdTimer = setTimeout(() => {
+          btn.classList.remove("holding");
+          action();
+        }, 500);
+      };
+      const cancel = () => {
+        btn.classList.remove("holding");
+        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+      };
+      btn.addEventListener("pointerdown", start);
+      btn.addEventListener("pointerup", cancel);
+      btn.addEventListener("pointerleave", cancel);
+      btn.addEventListener("pointercancel", cancel);
+    }
+    wireBulkHold($sellAllBtn, sellAll);
+    wireBulkHold($eatAllBtn, eatAll);
 
     // Settings reset flow (modal open/close wired via makeModal above).
     $muteToggle.addEventListener("click", toggleMute);
