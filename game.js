@@ -38,6 +38,9 @@
     { id: "nessie",     name: "Nessie",         emoji: "🦖", rarity: "mythic", hue: 0 },
     { id: "giantsquid", name: "Giant Squid",    emoji: "🦑", rarity: "mythic", hue: 0 },
     { id: "turtle",     name: "Ancient Turtle", emoji: "🐢", rarity: "mythic", hue: 0 },
+    // V10: the rarest fish in the pond. `weight` override drops it to ~1/4 the
+    // base mythic weight — in-tier but still the top of the ladder.
+    { id: "chickennugget", name: "Chicken Nugget Fish", emoji: "🍗", rarity: "mythic", hue: 0, weight: 0.25 },
   ];
 
   // V8.1 pacing tune (25-min completion was too fast). Legendary + mythic
@@ -741,10 +744,11 @@
     const luckBuff = state.buffs.get("luck");
     const luckMult = rod.luck * (luckBuff ? (1 + luckBuff.value) : 1);
 
-    // Build weights for each fish. Each fish in a tier carries that tier's full weight.
+    // Build weights for each fish. Each fish in a tier carries that tier's full weight
+    // unless a per-fish `weight` override pins it (e.g. a single "rarest in pond" fish).
     // Luck multiplier applies to rare + legendary + mythic (the "lucky" tiers).
     const weighted = FISH.map(f => {
-      let w = TIER_WEIGHT[f.rarity];
+      let w = f.weight != null ? f.weight : TIER_WEIGHT[f.rarity];
       if (f.rarity === "rare" || f.rarity === "legendary" || f.rarity === "mythic") w *= luckMult;
       return { fish: f, w };
     });
