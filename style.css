@@ -1075,7 +1075,12 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   gap: 8px;
   margin: 0 0 10px 0;
 }
-.bulk-actions.hidden { display: none; }
+.bulk-actions.empty .bulk-btn {
+  filter: grayscale(0.6) brightness(0.95);
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 .bulk-btn {
   position: relative;
   appearance: none;

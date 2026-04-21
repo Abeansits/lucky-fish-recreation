@@ -617,9 +617,12 @@
   // the swipe adds speed for older kids.
   function renderCatches() {
     const entries = [...state.inventory.entries()].filter(([, n]) => n > 0);
+    // V11: bulk actions always stay mounted — toggling their visibility
+    // shifted the layout every time the inventory went in/out of empty,
+    // which was jarring. Now they dim when there's nothing to act on.
+    $bulkActions.classList.toggle("empty", entries.length === 0);
     if (entries.length === 0) {
       $catches.innerHTML = `<div class="empty-catches">No catches yet — give it a cast!</div>`;
-      $bulkActions.classList.add("hidden");
       return;
     }
     const rarityOrder = { mythic: -1, legendary: 0, rare: 1, uncommon: 2, common: 3 };
@@ -675,9 +678,6 @@
       $catches.appendChild(entry);
     }
 
-    const totalFish = entries.reduce((s, [, n]) => s + n, 0);
-    if (totalFish >= 2) $bulkActions.classList.remove("hidden");
-    else $bulkActions.classList.add("hidden");
   }
 
   // Drag-to-commit on a catch card. Past the threshold either way, commit the
@@ -2374,7 +2374,7 @@
       let holdTimer = null;
       const start = (e) => {
         e.preventDefault();
-        if (state.eatingAll || $bulkActions.classList.contains("hidden")) return;
+        if (state.eatingAll || $bulkActions.classList.contains("empty")) return;
         btn.classList.add("holding");
         holdTimer = setTimeout(() => {
           btn.classList.remove("holding");
