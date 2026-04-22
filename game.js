@@ -2436,23 +2436,29 @@
     }
   }
 
-  // ---------- V5 edge flora ----------
+  // ---------- V14 edge flora (Ideogram sticker art) ----------
+  // V5 used emoji (🌿🪸) — V14 swaps in painterly PNGs that match assets/fish/*.
+  // Two seaweed clumps (sway), one coral center, two rocks scattered for depth.
   function renderEdgeFlora() {
     const flora = document.getElementById("edge-flora");
     if (!flora) return;
     if (flora.dataset.rendered === "1") return;
     flora.dataset.rendered = "1";
-    // Three clumps — left seaweed, center coral, right seaweed.
     const items = [
-      { emoji: "🌿", cls: "sway", left: "6%" },
-      { emoji: "🪸", cls: "coral", left: "48%" },
-      { emoji: "🌿", cls: "sway reverse", left: "90%" },
+      { src: "assets/env/seaweed.png",     cls: "flora-img sway",          left: "6%",  size: "110px" },
+      { src: "assets/env/rock_small.png",  cls: "flora-img flora-rock",    left: "22%", size: "64px"  },
+      { src: "assets/env/coral.png",       cls: "flora-img flora-coral",   left: "48%", size: "120px" },
+      { src: "assets/env/rock_medium.png", cls: "flora-img flora-rock",    left: "74%", size: "78px"  },
+      { src: "assets/env/seaweed.png",     cls: "flora-img sway reverse",  left: "90%", size: "100px" },
     ];
     for (const it of items) {
-      const el = document.createElement("div");
+      const el = document.createElement("img");
       el.className = `flora ${it.cls}`;
+      el.src = it.src;
+      el.alt = "";
+      el.decoding = "async";
       el.style.left = it.left;
-      el.textContent = it.emoji;
+      el.style.setProperty("--flora-h", it.size);
       flora.appendChild(el);
     }
   }
@@ -2531,16 +2537,29 @@
     if (ambientTracker.size < MAX_AMBIENT && Math.random() < 0.5) spawnAmbient();
   }
 
-  // ---------- V6 sky ambient: clouds + dragonfly ----------
+  // ---------- V6 sky ambient: clouds + V14 bird/airplane, sun/moon, celestial ----------
   const $skyAmbient = document.getElementById("sky-ambient");
   const skyTracker = new Set();
+  // V14 celestial body — persistent DOM node, just swapped between sun & moon
+  // by setDayNightPhase(). Parked as a single child of the sky zone.
+  let $celestial = null;
+  function ensureCelestial() {
+    if (!$skyAmbient) return null;
+    if ($celestial && $celestial.isConnected) return $celestial;
+    $celestial = document.createElement("img");
+    $celestial.className = "sky-celestial";
+    $celestial.alt = "";
+    $celestial.decoding = "async";
+    $celestial.src = "assets/env/sun.png";
+    $skyAmbient.appendChild($celestial);
+    return $celestial;
+  }
 
   function spawnSkyCloud() {
     if (!$skyAmbient) return;
     const c = document.createElement("div");
     c.className = "sky-cloud";
     c.textContent = "☁️";
-    const scale = 0.8 + Math.random() * 0.8;
     c.style.fontSize = `${(1.4 + Math.random() * 1.4).toFixed(2)}rem`;
     c.style.opacity = `${(0.7 + Math.random() * 0.3).toFixed(2)}`;
     c.style.top = `${10 + Math.random() * 55}%`;
@@ -2556,32 +2575,190 @@
     setTimeout(done, duration * 1000 + 1000);
   }
 
-  function spawnDragonfly() {
+  // V14 bird — replaces the V6 dragonfly stand-in. Flies across the sky zone.
+  function spawnBird() {
     if (!$skyAmbient) return;
-    const d = document.createElement("div");
-    d.className = "sky-dragonfly";
-    d.textContent = "🦋"; // stand-in — kid-readable; dragonfly emoji is inconsistent across platforms
-    d.style.top = `${30 + Math.random() * 40}%`;
+    const b = document.createElement("img");
+    b.className = "sky-bird";
+    b.alt = "";
+    b.decoding = "async";
+    b.src = "assets/env/bird.png";
+    b.style.top = `${18 + Math.random() * 50}%`;
     const dirLR = Math.random() < 0.5;
-    d.style.left = dirLR ? "-10%" : "110%";
-    const duration = 9 + Math.random() * 6;
-    d.style.transition = `left ${duration}s linear`;
-    if (!dirLR) d.style.transform = "scaleX(-1)";
-    $skyAmbient.appendChild(d);
-    skyTracker.add(d);
-    requestAnimationFrame(() => { d.style.left = dirLR ? "110%" : "-10%"; });
-    const done = () => { skyTracker.delete(d); d.remove(); };
-    d.addEventListener("transitionend", done, { once: true });
-    setTimeout(done, duration * 1000 + 1000);
+    b.style.left = dirLR ? "-12%" : "112%";
+    const duration = 10 + Math.random() * 6;
+    b.style.transition = `left ${duration}s linear`;
+    // Art faces right → flip for leftward flight (dirLR===false).
+    if (!dirLR) b.style.transform = "scaleX(-1)";
+    $skyAmbient.appendChild(b);
+    skyTracker.add(b);
+    requestAnimationFrame(() => { b.style.left = dirLR ? "112%" : "-12%"; });
+    const done = () => { skyTracker.delete(b); b.remove(); };
+    b.addEventListener("transitionend", done, { once: true });
+    setTimeout(done, duration * 1000 + 1200);
+  }
+
+  // V14 airplane — rare, slow, above the birds.
+  function spawnAirplane() {
+    if (!$skyAmbient) return;
+    const p = document.createElement("img");
+    p.className = "sky-airplane";
+    p.alt = "";
+    p.decoding = "async";
+    p.src = "assets/env/airplane.png";
+    p.style.top = `${6 + Math.random() * 16}%`;
+    const dirLR = Math.random() < 0.5;
+    p.style.left = dirLR ? "-18%" : "118%";
+    const duration = 18 + Math.random() * 8;
+    p.style.transition = `left ${duration}s linear`;
+    if (!dirLR) p.style.transform = "scaleX(-1)";
+    $skyAmbient.appendChild(p);
+    skyTracker.add(p);
+    requestAnimationFrame(() => { p.style.left = dirLR ? "118%" : "-18%"; });
+    const done = () => { skyTracker.delete(p); p.remove(); };
+    p.addEventListener("transitionend", done, { once: true });
+    setTimeout(done, duration * 1000 + 1200);
   }
 
   function skyLoop() {
-    // Keep 2-3 clouds drifting. Dragonflies show up less often (1 at a time).
-    const clouds = [...skyTracker].filter(el => el.classList.contains("sky-cloud"));
-    const dragonflies = [...skyTracker].filter(el => el.classList.contains("sky-dragonfly"));
+    // Keep 2-3 clouds drifting. Birds: up to 1 at a time, occasional.
+    // Airplane: ultra-rare (once every few minutes on average).
+    const clouds    = [...skyTracker].filter(el => el.classList.contains("sky-cloud"));
+    const birds     = [...skyTracker].filter(el => el.classList.contains("sky-bird"));
+    const airplanes = [...skyTracker].filter(el => el.classList.contains("sky-airplane"));
     if (clouds.length < 2) spawnSkyCloud();
     else if (clouds.length < 3 && Math.random() < 0.08) spawnSkyCloud();
-    if (dragonflies.length === 0 && Math.random() < 0.04) spawnDragonfly();
+    if (birds.length === 0 && Math.random() < 0.04) spawnBird();
+    // skyLoop runs ~2% of frames => ~1.2/sec; 0.0009 → ~1 per 925s ≈ every 3 min avg.
+    if (airplanes.length === 0 && Math.random() < 0.0009) spawnAirplane();
+  }
+
+  // ---------- V14 deep-water ambient (big fish + rare shark) ----------
+  // These are decorative only — no catch interaction. Confined to the lower
+  // third of the water zone (behind the main ambient-fish layer so they read
+  // as "background life"). Shark is rare (~1 per 3 min avg).
+  const AMBIENT_BG_SOURCES = [
+    "assets/env/bgfish_big.png",
+    "assets/env/bgfish_med.png",
+  ];
+  const bgAmbientTracker = new Set();
+
+  function spawnBgFish() {
+    if (!$ambient) return;
+    const f = document.createElement("img");
+    f.className = "bg-ambient-fish";
+    f.alt = "";
+    f.decoding = "async";
+    f.src = AMBIENT_BG_SOURCES[Math.floor(Math.random() * AMBIENT_BG_SOURCES.length)];
+    f.style.top = `${68 + Math.random() * 22}%`;
+    const dirLR = Math.random() < 0.5;
+    f.style.left = dirLR ? "-18%" : "118%";
+    const duration = 14 + Math.random() * 10;
+    f.style.transition = `left ${duration}s linear`;
+    // Art faces right → flip for rightward→leftward direction.
+    if (!dirLR) f.style.transform = "scaleX(-1)";
+    $ambient.appendChild(f);
+    bgAmbientTracker.add(f);
+    requestAnimationFrame(() => { f.style.left = dirLR ? "118%" : "-18%"; });
+    const done = () => { bgAmbientTracker.delete(f); f.remove(); };
+    f.addEventListener("transitionend", done, { once: true });
+    setTimeout(done, duration * 1000 + 1200);
+  }
+
+  function spawnBgShark() {
+    if (!$ambient) return;
+    const s = document.createElement("img");
+    s.className = "bg-ambient-shark";
+    s.alt = "";
+    s.decoding = "async";
+    s.src = "assets/env/shark_bg.png";
+    s.style.top = `${72 + Math.random() * 14}%`;
+    const dirLR = Math.random() < 0.5;
+    s.style.left = dirLR ? "-22%" : "122%";
+    const duration = 20 + Math.random() * 8;
+    s.style.transition = `left ${duration}s linear`;
+    if (!dirLR) s.style.transform = "scaleX(-1)";
+    $ambient.appendChild(s);
+    bgAmbientTracker.add(s);
+    requestAnimationFrame(() => { s.style.left = dirLR ? "122%" : "-22%"; });
+    const done = () => { bgAmbientTracker.delete(s); s.remove(); };
+    s.addEventListener("transitionend", done, { once: true });
+    setTimeout(done, duration * 1000 + 1500);
+  }
+
+  function bgAmbientLoop() {
+    const fish  = [...bgAmbientTracker].filter(el => el.classList.contains("bg-ambient-fish"));
+    const sharks = [...bgAmbientTracker].filter(el => el.classList.contains("bg-ambient-shark"));
+    if (fish.length < 1 && Math.random() < 0.05) spawnBgFish();
+    else if (fish.length < 2 && Math.random() < 0.015) spawnBgFish();
+    // Shark: ~0.0008 per ~1.2Hz tick = once per ~1000s ≈ every ~17min avg.
+    // Task asked for "rare". We bump a little so it shows up in a ~5-10min session occasionally.
+    if (sharks.length === 0 && Math.random() < 0.0025) spawnBgShark();
+  }
+
+  // ---------- V14 day/night cycle ----------
+  // Cosmetic only — recolors the pond sky/water gradient and swaps the
+  // sun/moon asset. Full loop = DAY_NIGHT_PERIOD_MS. Anchored to Date.now()
+  // so it advances continuously across reloads without a state cell.
+  //
+  // IMPORTANT: no gameplay or analytics changes here. `track()` paths are
+  // untouched — visuals are the only side effect. If this ever needs to
+  // reach into catch resolution, add a separate non-cosmetic system.
+  const DAY_NIGHT_PERIOD_MS = 8 * 60 * 1000; // 8 min full cycle — task said 5-10
+  let dayNightPhaseLabel = null; // "day" | "dusk" | "night" | "dawn"
+  function dayNightProgress() {
+    // 0.0 = mid-day, 0.25 = dusk, 0.5 = mid-night, 0.75 = dawn.
+    // `window.__dnForceT` (0..1) lets test/dev override for one tick cycle.
+    if (typeof window.__dnForceT === "number") return window.__dnForceT;
+    const t = (Date.now() % DAY_NIGHT_PERIOD_MS) / DAY_NIGHT_PERIOD_MS;
+    return t;
+  }
+  function phaseFromProgress(t) {
+    // Four gentle quarters. The visuals interpolate smoothly within each.
+    if (t < 0.20 || t >= 0.80) return "day";
+    if (t >= 0.20 && t < 0.35) return "dusk";
+    if (t >= 0.35 && t < 0.65) return "night";
+    return "dawn"; // 0.65..0.80
+  }
+  function updateDayNight(force) {
+    if (!document.body) return;
+    const t = dayNightProgress();
+    const phase = phaseFromProgress(t);
+    // Smooth sky/water color via a single 0..1 "nightness" factor driven by
+    // cosine — peaks at t=0.5 (deep night), zero at t=0 and t=1 (noon).
+    const nightness = (1 - Math.cos(t * Math.PI * 2)) / 2;
+    // Write as CSS vars on <body>; pond gradient reads these.
+    document.body.style.setProperty("--night-mix", nightness.toFixed(3));
+    if (force || phase !== dayNightPhaseLabel) {
+      dayNightPhaseLabel = phase;
+      document.body.dataset.dnPhase = phase;
+      // Swap the celestial art when the phase crosses into mostly-dark or
+      // mostly-light. Sun lives during day+dusk+dawn; moon during deep night.
+      const el = ensureCelestial();
+      if (el) {
+        const wantMoon = (phase === "night");
+        const desired = wantMoon ? "assets/env/moon.png" : "assets/env/sun.png";
+        if (!el.src.endsWith(desired)) el.src = desired;
+      }
+    }
+    // Sun and moon each arc across the sky during their visibility window.
+    // Day window spans t ∈ [0.65, 1) ∪ [0, 0.35) = 70% of the cycle.
+    // Night window spans t ∈ [0.35, 0.65) = 30% of the cycle.
+    if ($celestial) {
+      let bodyT; // 0 = rising east, 1 = setting west
+      if (phase === "night") {
+        bodyT = (t - 0.35) / 0.30;
+      } else {
+        // Shift so sunrise (t=0.65) becomes 0 and sunset (t=0.35) becomes 1.
+        const adj = (t + 0.35) % 1; // 0 at t=0.65, 0.70 at t=0.35
+        bodyT = Math.min(1, Math.max(0, adj / 0.70));
+      }
+      const x = bodyT * 100;
+      // Half-sine parabola: y = 85% at horizon, 15% at zenith.
+      const y = 85 - Math.sin(bodyT * Math.PI) * 70;
+      $celestial.style.left = `${x.toFixed(1)}%`;
+      $celestial.style.top  = `${y.toFixed(1)}%`;
+    }
   }
 
   // ---------- Tick ----------
@@ -2596,8 +2773,12 @@
     if (Math.random() < 0.06) ambientLoop();
     // V4 bubbles — low rate so the pond feels alive, not fizzy.
     if (Math.random() < 0.03) spawnBubble();
-    // V6 sky ambient — clouds drifting, occasional dragonfly.
+    // V6/V14 sky ambient — clouds drifting, bird/airplane rolls inside.
     if (Math.random() < 0.02) skyLoop();
+    // V14 deep-water ambient — big fish drift, rare shark swim-bys.
+    if (Math.random() < 0.02) bgAmbientLoop();
+    // V14 day/night cycle — recolor only, no gameplay impact.
+    if (Math.random() < 0.02) updateDayNight();
     requestAnimationFrame(tick);
   }
 
@@ -3418,6 +3599,11 @@
     // V6 prime a couple clouds so the sky isn't empty on first load.
     spawnSkyCloud();
     spawnSkyCloud();
+    // V14: celestial body (sun/moon) + an initial pass of the day/night cycle.
+    ensureCelestial();
+    updateDayNight(true);
+    // V14 prime 1 bg-ambient fish so the deep water isn't empty.
+    spawnBgFish();
     requestAnimationFrame(tick);
 
     // Seed achievement-unlock state silently so pre-existing players don't

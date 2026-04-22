@@ -36,6 +36,24 @@
   </script>
 </head>
 <body>
+  <!-- V14 welcome screen — click-to-start gate on every page load. -->
+  <div id="welcome-screen" class="welcome-screen" role="dialog" aria-label="Welcome to Lucky Fish">
+    <div class="welcome-bg" aria-hidden="true"></div>
+    <div class="welcome-content">
+      <div class="welcome-eyebrow" aria-hidden="true">🎣</div>
+      <h1 class="welcome-title" aria-label="Lucky Fish">
+        <span class="welcome-word">
+          <span class="welcome-letter" style="--i:0">L</span><span class="welcome-letter" style="--i:1">U</span><span class="welcome-letter" style="--i:2">C</span><span class="welcome-letter" style="--i:3">K</span><span class="welcome-letter" style="--i:4">Y</span>
+        </span>
+        <span class="welcome-word">
+          <span class="welcome-letter" style="--i:5">F</span><span class="welcome-letter" style="--i:6">I</span><span class="welcome-letter" style="--i:7">S</span><span class="welcome-letter" style="--i:8">H</span>
+        </span>
+      </h1>
+      <div id="welcome-splash" class="welcome-splash" aria-hidden="true">Chicken nugget fish is the best fish!</div>
+      <button id="welcome-start-btn" class="welcome-start" type="button">Tap to play!</button>
+    </div>
+  </div>
+
   <header class="app-header">
     <h1 class="title">
       <span class="title-emoji">🎣</span>
@@ -296,6 +314,70 @@
 
   <!-- Notifications pile in the corner -->
   <div id="notifications" class="notifications" aria-live="polite"></div>
+
+  <!-- V14 welcome-screen splash text + dismiss — runs immediately so the
+       greeting is live before game.js parses. Dismisses the overlay on the
+       first tap / click / key / cast and tracks one PostHog event. -->
+  <script>
+    (function () {
+      var SPLASHES = [
+        "Chicken nugget fish is the best fish!",
+        "Now with more water!",
+        "100% caffeine-free!",
+        "Kraken-approved gameplay!",
+        "Mermaids hate this one trick!",
+        "Nessie says hi!",
+        "Sharks are friends, mostly!",
+        "Powered by bubbles!",
+        "Dragon ducky is watching you fish!",
+        "10/10 would cast again!",
+        "Kid-tested, pond-approved!",
+        "Anchovies are secretly cool!",
+        "Every cast counts!",
+        "No tuna were harmed!",
+        "Pearls beat pennies!",
+        "Featuring one (1) giant squid!",
+        "Bigger than your bathtub!",
+        "Master Angler energy!",
+        "Rainbows mean good things!",
+        "0% chicken, 100% nugget!"
+      ];
+      var splashEl = document.getElementById("welcome-splash");
+      if (splashEl) {
+        splashEl.textContent = SPLASHES[Math.floor(Math.random() * SPLASHES.length)];
+      }
+      var screen = document.getElementById("welcome-screen");
+      if (!screen) return;
+      var dismissed = false;
+      function dismiss() {
+        if (dismissed) return;
+        dismissed = true;
+        screen.classList.add("welcome-hiding");
+        try {
+          if (window.posthog && typeof window.posthog.capture === "function") {
+            window.posthog.capture("welcome_dismissed", { splash: splashEl ? splashEl.textContent : "" });
+          }
+        } catch (e) {}
+        setTimeout(function () {
+          screen.remove();
+          document.body.classList.remove("welcome-open");
+        }, 420);
+      }
+      document.body.classList.add("welcome-open");
+      var startBtn = document.getElementById("welcome-start-btn");
+      if (startBtn) startBtn.addEventListener("click", dismiss);
+      screen.addEventListener("click", function (e) {
+        // Any tap on the overlay dismisses (kids tap everywhere).
+        dismiss();
+      });
+      document.addEventListener("keydown", function onKey(e) {
+        if (dismissed) return;
+        if (e.key === " " || e.key === "Enter" || e.key === "Escape") {
+          dismiss();
+        }
+      });
+    })();
+  </script>
 
   <script src="game.js"></script>
 </body>
