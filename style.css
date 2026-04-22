@@ -257,6 +257,10 @@ h2 {
   width: 100%;
   max-width: 1280px;
   margin: 0 auto;
+  /* V14: keep panel heights independent so a long catches list can't stretch
+     the pond row and push the Cast button below the fold. Each panel sizes
+     itself; the catches panel scrolls internally when it fills. */
+  align-items: start;
 }
 @media (max-width: 920px) {
   .board {
@@ -976,10 +980,14 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   transform-origin: 50% 100%;
   filter: drop-shadow(0 3px 3px rgba(0, 10, 25, 0.55));
 }
-/* V14 <img>-based flora — height driven by a CSS var set from JS. */
+/* V14 <img>-based flora — height driven by a CSS var set from JS.
+   PNGs were bottom-trimmed (scripts/trim_transparent.py) so the bottom
+   of the image is the bottom of the illustration — bottom:0 anchors them
+   to the pond floor instead of floating. */
 .flora.flora-img {
   width: auto;
   height: var(--flora-h, 100px);
+  bottom: 0;
 }
 .flora.sway         { animation: floraSway 4.8s ease-in-out infinite; }
 .flora.sway.reverse { animation: floraSway 4.2s ease-in-out infinite reverse; }
@@ -989,11 +997,11 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   animation: floraCoral 6s ease-in-out infinite;
 }
 .flora.flora-coral {
-  bottom: -10px;
+  bottom: 0;
   animation: floraCoral 6s ease-in-out infinite;
 }
 .flora.flora-rock {
-  bottom: -4px;
+  bottom: 0;
   animation: none;
   /* rocks sit slightly behind fish action — no transform origin override. */
 }
@@ -2958,7 +2966,9 @@ body.welcome-open { overflow: hidden; }
   z-index: 1; /* below the main ambient emoji fish which run at z:2 */
 }
 .ambient-fish .bg-ambient-fish { width: 88px; height: auto; }
-.ambient-fish .bg-ambient-shark { width: 132px; height: auto; opacity: 0.62; }
+/* Shark is solid — V14.1 feedback: 0.62 made coral show through. 0.92 keeps
+   a subtle "atmospheric" recession without visible transparency. */
+.ambient-fish .bg-ambient-shark { width: 132px; height: auto; opacity: 0.92; }
 
 /* ============================================================================
    V14 day/night cycle — cosmetic recolor only. --night-mix is 0..1, driven

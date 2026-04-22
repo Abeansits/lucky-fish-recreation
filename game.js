@@ -2740,6 +2740,10 @@
         const desired = wantMoon ? "assets/env/moon.png" : "assets/env/sun.png";
         if (!el.src.endsWith(desired)) el.src = desired;
       }
+      // Keep the idle weather pill honest: "☀️ Sunny" in the day, "🌙 Clear"
+      // at night. Skipped if a weather event is active or pending — the pill
+      // is owned by the event in those windows.
+      if (!state.activeEvent && !state.pendingEvent) renderWeatherPill();
     }
     // Sun and moon each arc across the sky during their visibility window.
     // Day window spans t ∈ [0.65, 1) ∪ [0, 0.35) = 70% of the cycle.
@@ -3318,12 +3322,15 @@
       `;
       return;
     }
-    // Idle: ☀️ sunny ambient — the baseline 95%-of-the-time state.
+    // Idle: ☀️ Sunny during day/dusk/dawn, 🌙 Clear at night (V14 day/night
+    // cycle aware — the body phase is written by updateDayNight()).
+    const phase = (document.body && document.body.dataset.dnPhase) || "day";
+    const isNight = phase === "night";
     $eventPill.classList.remove("hidden");
     $eventPill.className = "event-pill idle";
     $eventPill.innerHTML = `
-      <span class="event-pill-emoji">☀️</span>
-      <span class="event-pill-label">Sunny</span>
+      <span class="event-pill-emoji">${isNight ? "🌙" : "☀️"}</span>
+      <span class="event-pill-label">${isNight ? "Clear" : "Sunny"}</span>
     `;
   }
 
