@@ -2724,9 +2724,24 @@
     if (!document.body) return;
     const t = dayNightProgress();
     const phase = phaseFromProgress(t);
-    // Smooth sky/water color via a single 0..1 "nightness" factor driven by
-    // cosine — peaks at t=0.5 (deep night), zero at t=0 and t=1 (noon).
-    const nightness = (1 - Math.cos(t * Math.PI * 2)) / 2;
+    // Piecewise 0..1 "nightness" factor, flat at the extremes so noon looks
+    // bright and midnight looks dark. V14.1 used a pure cosine, which put
+    // 10-35% dark overlay on the sky during most of the "day" phase and
+    // made it read as grey haze instead of sunny.
+    let nightness;
+    if (t < 0.20 || t >= 0.80) {
+      nightness = 0; // day: no tint
+    } else if (t >= 0.35 && t < 0.65) {
+      nightness = 1; // deep night: full tint
+    } else if (t < 0.35) {
+      // dusk: 0 -> 1 over t ∈ [0.20, 0.35). Smoothstep for a gentle ramp.
+      const k = (t - 0.20) / 0.15;
+      nightness = k * k * (3 - 2 * k);
+    } else {
+      // dawn: 1 -> 0 over t ∈ [0.65, 0.80).
+      const k = (t - 0.65) / 0.15;
+      nightness = 1 - k * k * (3 - 2 * k);
+    }
     // Write as CSS vars on <body>; pond gradient reads these.
     document.body.style.setProperty("--night-mix", nightness.toFixed(3));
     if (force || phase !== dayNightPhaseLabel) {
