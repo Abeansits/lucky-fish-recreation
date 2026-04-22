@@ -18,29 +18,30 @@
 //   DOM refs                         L495
 //   Modal helper                     L555
 //   Audio (WebAudio blips, MP3s)     L586
+//   Ambient soundtrack (music)       L735
 //   Rendering
-//     renderRods                     L849
-//     renderCatches                  L908
-//   Shiny auto-reel lock             L1118
+//     renderRods                     L982
+//     renderCatches                  L1041
+//   Shiny auto-reel lock             L1251
 //   Game logic
-//     cast()                         L1243
-//     resolveCatch()                 L1401
-//   Bulk eat / sell                  L1716
-//   Notifications                    L1870
-//   Legendary + shiny sequences      L2079
-//   Cast ripples / flora / bubbles / ambient fish / sky        L2267–2396
-//   Main tick loop                   L2449
-//   Next-goal strip                  L2466
-//   Album                            L2522
-//   Shop (decorations + rods)        L2598
-//   Achievements                     L2737
-//   Naming modal (first-legendary)   L2826
-//   Event lifecycle (impl)           L2902
+//     cast()                         L1376
+//     resolveCatch()                 L1534
+//   Bulk eat / sell                  L1849
+//   Notifications                    L2003
+//   Legendary + shiny sequences      L2212
+//   Cast ripples / flora / bubbles / ambient fish / sky        L2400–2529
+//   Main tick loop                   L2582
+//   Next-goal strip                  L2599
+//   Album                            L2655
+//   Shop (decorations + rods)        L2731
+//   Achievements                     L2870
+//   Naming modal (first-legendary)   L2959
+//   Event lifecycle (impl)           L3035
 //     maybeStartEvent / schedulePending / startEvent / tickEvent / endEvent
-//     renderWeatherPill              L2970
-//   Profiles (multi-slot save)       L3167
-//   init()                           L3247
-//   Settings / Reset                 L3414
+//     renderWeatherPill              L3103
+//   Profiles (multi-slot save)       L3300
+//   init()                           L3380
+//   Settings / Reset                 L3550
 //
 // Dev hooks (set on window before/during play, consumed by cast() + events):
 //   window.__forceEvent    = "storm"|"rainbow"|"moon"   → schedules that event on next cast
@@ -730,6 +731,143 @@
     stopSoundKey("junk");
     blip({ key: "junk", freq: 380, slideTo: 280, duration: 0.16, type: "triangle", vol: 0.11, attack: 0.01, release: 0.10 });
     blip({ key: "junk", freq: 280, slideTo: 180, duration: 0.22, type: "triangle", vol: 0.12, attack: 0.01, release: 0.14, at: 0.13 });
+  }
+
+  // ---------- V13: Ambient soundtrack ----------
+  // Six-track shuffled playlist; two <Audio> elements ping-pong so tracks
+  // crossfade into each other (no gap, no re-shuffle repeats until the
+  // queue drains). Respects the existing mute toggle — one knob kills both
+  // SFX and music. Browsers block cold autoplay, so playback starts on the
+  // first user pointerdown.
+  const MUSIC_TRACKS = [
+    "Beneath the Surface.mp3",
+    "Last Light.mp3",
+    "Morning Ripples.mp3",
+    "Still Waters x The Enchanted Quest 🌄 (Mashup).mp3",
+    "Still Waters x The Enchanted Quest 🌄 (Mashup)-2.mp3",
+    "Sunshine on the Dock.mp3",
+  ];
+  const MUSIC_VOLUME = 0.22;        // ambient bed — SFX still punches through
+  const MUSIC_CROSSFADE_MS = 2000;  // overlap between tracks
+  const musicState = {
+    unlocked: false,   // flips to true on first user pointerdown
+    started: false,    // set once to avoid double-starting
+    queue: [],         // upcoming tracks in shuffle order
+    active: null,      // the <Audio> currently audible (or fading in)
+    standby: null,     // the other <Audio> (previous track fading out, or idle)
+    fadeTimer: null,
+  };
+  function shuffledMusicQueue() {
+    const q = MUSIC_TRACKS.slice();
+    for (let i = q.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [q[i], q[j]] = [q[j], q[i]];
+    }
+    return q;
+  }
+  function musicSrc(name) { return "assets/music/" + encodeURIComponent(name); }
+  function nextTrackName() {
+    if (musicState.queue.length === 0) musicState.queue = shuffledMusicQueue();
+    return musicState.queue.shift();
+  }
+  function makeMusicElement() {
+    const a = new Audio();
+    a.preload = "auto";
+    a.volume = 0;
+    // Single-track playback only — we do our own "loop" by queueing the next.
+    a.loop = false;
+    return a;
+  }
+  function initMusic() {
+    musicState.active = makeMusicElement();
+    musicState.standby = makeMusicElement();
+    // When the active track ends without a crossfade (e.g. short track,
+    // timeupdate missed), roll straight into the next one.
+    const onEnded = () => { if (!audioMuted()) crossfadeToNext(); };
+    musicState.active.addEventListener("ended", onEnded);
+    musicState.standby.addEventListener("ended", onEnded);
+    // Kick off the crossfade before a track fully ends so there's no gap.
+    const onTimeUpdate = (el) => () => {
+      if (!el.duration || el.duration === Infinity) return;
+      if (audioMuted()) return;
+      const remainingMs = (el.duration - el.currentTime) * 1000;
+      if (remainingMs <= MUSIC_CROSSFADE_MS && el === musicState.active) {
+        crossfadeToNext();
+      }
+    };
+    musicState.active.addEventListener("timeupdate", onTimeUpdate(musicState.active));
+    musicState.standby.addEventListener("timeupdate", onTimeUpdate(musicState.standby));
+  }
+  function unlockMusic() {
+    if (musicState.unlocked) return;
+    musicState.unlocked = true;
+    if (!audioMuted()) startMusic();
+  }
+  function startMusic() {
+    if (musicState.started) return;
+    if (audioMuted()) return;
+    const name = nextTrackName();
+    musicState.active.src = musicSrc(name);
+    musicState.active.volume = 0;
+    const p = musicState.active.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+    fadeTo(musicState.active, MUSIC_VOLUME, MUSIC_CROSSFADE_MS);
+    musicState.started = true;
+  }
+  function crossfadeToNext() {
+    if (audioMuted()) return;
+    // Guard re-entrancy: if the standby is already fading in, ignore.
+    if (musicState.standby.volume > 0 && !musicState.standby.paused) return;
+    // Capture element refs by value before the slot swap — the fade callbacks
+    // fire ~2s later, and if we reference musicState.active from inside them
+    // we'll be pointing at the newly-swapped-in track instead of the old one.
+    const outgoing = musicState.active;
+    const incoming = musicState.standby;
+    const name = nextTrackName();
+    incoming.src = musicSrc(name);
+    incoming.currentTime = 0;
+    incoming.volume = 0;
+    const p = incoming.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+    fadeTo(incoming, MUSIC_VOLUME, MUSIC_CROSSFADE_MS);
+    fadeTo(outgoing, 0, MUSIC_CROSSFADE_MS, () => {
+      try { outgoing.pause(); } catch (e) {}
+    });
+    // Swap: incoming is now the audible active, outgoing becomes standby.
+    musicState.active = incoming;
+    musicState.standby = outgoing;
+  }
+  function fadeTo(el, target, durationMs, onDone) {
+    const start = el.volume;
+    const delta = target - start;
+    if (durationMs <= 0 || delta === 0) { el.volume = target; onDone && onDone(); return; }
+    const steps = Math.max(12, Math.round(durationMs / 60));
+    const stepMs = durationMs / steps;
+    let i = 0;
+    const tick = () => {
+      i += 1;
+      const t = Math.min(1, i / steps);
+      el.volume = Math.max(0, Math.min(1, start + delta * t));
+      if (i < steps) setTimeout(tick, stepMs);
+      else onDone && onDone();
+    };
+    setTimeout(tick, stepMs);
+  }
+  function pauseMusic() {
+    try { musicState.active && musicState.active.pause(); } catch (e) {}
+    try { musicState.standby && musicState.standby.pause(); } catch (e) {}
+  }
+  function resumeMusic() {
+    if (audioMuted()) return;
+    if (!musicState.unlocked) return;   // haven't had first gesture yet
+    if (!musicState.started) { startMusic(); return; }
+    // Resume whichever track was audible.
+    try {
+      if (musicState.active.paused) {
+        const p = musicState.active.play();
+        if (p && typeof p.catch === "function") p.catch(() => {});
+      }
+    } catch (e) {}
   }
 
   // V10: light "ka-ching" for selling — no sample file, just a short chime
@@ -3036,6 +3174,25 @@
     state.pendingEvent.startsAt = Date.now() - 1;
     return `advanced ${state.pendingEvent.id}`;
   };
+  // Dev hook: inspect music playback state.
+  window.__musicState = () => ({
+    unlocked: musicState.unlocked,
+    started: musicState.started,
+    upcoming: musicState.queue.slice(),
+    activeSrc: musicState.active && musicState.active.src,
+    activeVolume: musicState.active && musicState.active.volume,
+    activePaused: musicState.active && musicState.active.paused,
+    activeCurrent: musicState.active && musicState.active.currentTime,
+    activeDuration: musicState.active && musicState.active.duration,
+    standbySrc: musicState.standby && musicState.standby.src,
+    standbyVolume: musicState.standby && musicState.standby.volume,
+    standbyPaused: musicState.standby && musicState.standby.paused,
+  });
+  // Dev hook: immediately start the crossfade to the next track.
+  window.__musicSkip = () => {
+    crossfadeToNext();
+    return "crossfading";
+  };
 
   function showEventStartNotif(event) {
     const n = document.createElement("div");
@@ -3254,6 +3411,9 @@
     renderEdgeFlora();
     renderMuteToggle();
     renderWeatherPill();
+    initMusic();
+    // Browsers block cold autoplay — wait for the first user gesture.
+    document.addEventListener("pointerdown", unlockMusic, { once: true, capture: true });
     for (let i = 0; i < MIN_AMBIENT; i++) spawnAmbient();
     // V6 prime a couple clouds so the sky isn't empty on first load.
     spawnSkyCloud();
@@ -3426,8 +3586,13 @@
     prog.muted = !prog.muted;
     saveProgression();
     renderMuteToggle();
-    // If unmuting, chirp a short confirmation so the user hears it works.
-    if (!prog.muted) playFile("common");
+    if (prog.muted) {
+      pauseMusic();
+    } else {
+      // If unmuting, chirp a short confirmation so the user hears it works.
+      playFile("common");
+      resumeMusic();
+    }
   }
 
   let resetCountdownTimer = null;
