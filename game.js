@@ -1,6 +1,54 @@
 // Lucky Fish — vanilla JS game.
 // Design rules: no backend, every cast produces something.
 // V2 adds localStorage progression (rod unlocks, discovery album, milestones, daily gift).
+//
+// ============================================================================
+// TABLE OF CONTENTS (approximate line anchors — keep in sync when re-arranging)
+// ============================================================================
+//   Analytics                        L56
+//   Data catalogs
+//     FISH                           L74
+//     EVENTS / MUTATIONS             L122 / L127
+//     JUNK                           L149
+//     RODS                           L176
+//     DECORATIONS                    L291
+//   Art helpers (fishArt/rodArt/…)   L224
+//   Persistence (profiles, slots)    L299
+//   State object                     L460
+//   DOM refs                         L495
+//   Modal helper                     L555
+//   Audio (WebAudio blips, MP3s)     L586
+//   Rendering
+//     renderRods                     L849
+//     renderCatches                  L908
+//   Shiny auto-reel lock             L1118
+//   Game logic
+//     cast()                         L1243
+//     resolveCatch()                 L1401
+//   Bulk eat / sell                  L1716
+//   Notifications                    L1870
+//   Legendary + shiny sequences      L2079
+//   Cast ripples / flora / bubbles / ambient fish / sky        L2267–2396
+//   Main tick loop                   L2449
+//   Next-goal strip                  L2466
+//   Album                            L2522
+//   Shop (decorations + rods)        L2598
+//   Achievements                     L2737
+//   Naming modal (first-legendary)   L2826
+//   Event lifecycle (impl)           L2902
+//     maybeStartEvent / schedulePending / startEvent / tickEvent / endEvent
+//     renderWeatherPill              L2970
+//   Profiles (multi-slot save)       L3167
+//   init()                           L3247
+//   Settings / Reset                 L3414
+//
+// Dev hooks (set on window before/during play, consumed by cast() + events):
+//   window.__forceEvent    = "storm"|"rainbow"|"moon"   → schedules that event on next cast
+//   window.__forceRarity   = "common"|"uncommon"|"rare"|"legendary"|"mythic"
+//   window.__forceShiny    = true                       → next catch is shiny
+//   window.__forceMutation = true                       → next catch is a mutation (needs active event)
+//   window.__skipPending()                              → fast-forward a pending weather event to active
+// ============================================================================
 
 (() => {
   "use strict";
@@ -82,9 +130,16 @@
     lunar:     { id: "lunar",     adj: "Lunar",     color: "#e8e9ff", glow: "rgba(232, 233, 255, 0.7)",  icon: "🌕" },
   };
   const EVENT_DURATION_MS = 60_000;
+  const EVENT_PENDING_MS = 30_000; // warning window before an event actually starts
   const EVENT_CHANCE_PER_CAST = 0.005;
   const MUTATION_CHANCE_IN_EVENT = 0.10;
   const MUTATION_MULT = 3; // pearls multiplier; stacks with shiny's 10×
+  // V13: pending weather flavor text per event — shown in the pill + pond banner
+  const EVENT_PENDING_FLAVOR = {
+    storm:   { verb: "BREWING", pillLabel: "Storm brewing", bannerIcon: "⚡" },
+    rainbow: { verb: "FORMING", pillLabel: "Rainbow forming", bannerIcon: "🌈" },
+    moon:    { verb: "RISING",  pillLabel: "Moon rising",    bannerIcon: "🌙" },
+  };
   function eventById(id) { return EVENTS.find(e => e.id === id); }
   function mutationById(id) { return MUTATIONS[id]; }
 
@@ -190,6 +245,11 @@
     const classes = ["badge-art", cls].filter(Boolean).join(" ");
     const onerr = _artEscape(_artFallback(fallbackEmoji, classes));
     return `<img class="${classes}" src="assets/badges/${badgeId}.png" alt="" onerror="${onerr}">`;
+  }
+  function decoArt(deco, { cls = "" } = {}) {
+    const classes = ["deco-art", cls].filter(Boolean).join(" ");
+    const onerr = _artEscape(_artFallback(deco.emoji, classes));
+    return `<img class="${classes}" src="assets/decorations/${deco.id}.png" alt="${_artEscape(deco.name)}" onerror="${onerr}">`;
   }
 
   // ---------- V3 additions ----------
@@ -424,6 +484,10 @@
     // Shape: { id: "storm"|"rainbow"|"moon", endsAt: ms } or null. Session-
     // only — doesn't persist across reloads by design (events are a moment).
     activeEvent: null,
+    // V13: pending weather window. Pre-warning phase before an event actually
+    // triggers — shows a banner in the pond and a warning pill in the header.
+    // Shape: { id, startsAt: ms } or null.
+    pendingEvent: null,
     eventTickerId: null, // setInterval id for the countdown pill refresh
   };
 
@@ -2544,7 +2608,7 @@
       el.style.left = `${deco.pos.x}%`;
       el.style.top = `${deco.pos.y}%`;
       el.style.setProperty("--d", `${(i * 0.35).toFixed(2)}s`);
-      el.textContent = deco.emoji;
+      el.innerHTML = decoArt(deco);
       (deco.surface && surfaceLayer ? surfaceLayer : $decorations).appendChild(el);
     });
   }
@@ -2607,7 +2671,7 @@
       const card = document.createElement("div");
       card.className = "shop-card" + (owned ? " owned" : (canAfford ? "" : " locked"));
       card.innerHTML = `
-        <span class="shop-card-emoji">${deco.emoji}</span>
+        <span class="shop-card-emoji deco-shop-art">${decoArt(deco)}</span>
         <span class="shop-card-name">${deco.name}</span>
         ${owned
           ? `<span class="shop-owned-tag">✓ Placed!</span>`
@@ -2838,32 +2902,59 @@
   // ---------- V12: Event lifecycle (impl) ----------
 
   maybeStartEvent = function(force = null) {
-    if (state.activeEvent) return;
+    // Already in a weather state — don't stack.
+    if (state.activeEvent || state.pendingEvent) return;
     const shouldStart = force != null || window.__forceEvent != null || Math.random() < EVENT_CHANCE_PER_CAST;
     if (!shouldStart) return;
     const forcedId = force || window.__forceEvent;
     if (window.__forceEvent) window.__forceEvent = null;
     const event = forcedId ? eventById(forcedId) : EVENTS[Math.floor(Math.random() * EVENTS.length)];
     if (!event) return;
-    startEvent(event);
+    schedulePendingEvent(event);
   };
 
+  function schedulePendingEvent(event) {
+    state.pendingEvent = { id: event.id, startsAt: Date.now() + EVENT_PENDING_MS };
+    ensureWeatherTicker();
+    showWeatherBanner(event);
+    renderWeatherPill();
+  }
+
   function startEvent(event) {
+    state.pendingEvent = null;
+    hideWeatherBanner();
     state.activeEvent = { id: event.id, endsAt: Date.now() + EVENT_DURATION_MS };
     document.body.classList.add("event-active", `event-${event.id}`);
     showEventStartNotif(event);
     playEventStartSound();
-    renderEventPill();
+    renderWeatherPill();
     spawnEventFlair(event);
-    // Tick the countdown every second so the pill label updates.
-    if (state.eventTickerId) clearInterval(state.eventTickerId);
+    ensureWeatherTicker();
+  }
+
+  function ensureWeatherTicker() {
+    if (state.eventTickerId) return;
     state.eventTickerId = setInterval(tickEvent, 1000);
   }
 
   tickEvent = function() {
-    if (!state.activeEvent) return;
-    if (Date.now() >= state.activeEvent.endsAt) { endEvent(); return; }
-    renderEventPill();
+    // Pending → promote to active once its start time arrives.
+    if (state.pendingEvent) {
+      if (Date.now() >= state.pendingEvent.startsAt) {
+        const event = eventById(state.pendingEvent.id);
+        if (event) startEvent(event);
+        return;
+      }
+      renderWeatherPill();
+      return;
+    }
+    if (state.activeEvent) {
+      if (Date.now() >= state.activeEvent.endsAt) { endEvent(); return; }
+      renderWeatherPill();
+      return;
+    }
+    // Idle with nothing to tick — stop the interval to keep things quiet.
+    if (state.eventTickerId) { clearInterval(state.eventTickerId); state.eventTickerId = null; }
   };
 
   endEvent = function() {
@@ -2871,31 +2962,80 @@
     state.activeEvent = null;
     if (state.eventTickerId) { clearInterval(state.eventTickerId); state.eventTickerId = null; }
     document.body.classList.remove("event-active", "event-storm", "event-rainbow", "event-moon");
-    renderEventPill();
+    renderWeatherPill();
     clearEventFlair();
     if (event) showEventEndNotif(event);
   };
 
-  function renderEventPill() {
+  function renderWeatherPill() {
     if (!$eventPill) return;
-    if (!state.activeEvent) {
-      $eventPill.classList.add("hidden");
-      $eventPill.innerHTML = "";
+    // Pill is always visible — three states: active event, pending warning, idle sunny.
+    if (state.activeEvent) {
+      const event = eventById(state.activeEvent.id);
+      if (!event) return;
+      const remaining = Math.max(0, Math.ceil((state.activeEvent.endsAt - Date.now()) / 1000));
+      const ratio = Math.max(0, Math.min(1, (state.activeEvent.endsAt - Date.now()) / EVENT_DURATION_MS));
+      $eventPill.classList.remove("hidden");
+      $eventPill.className = `event-pill active event-${event.id}`;
+      $eventPill.innerHTML = `
+        <span class="event-pill-emoji">${event.emoji}</span>
+        <span class="event-pill-label">${event.name.toUpperCase()}</span>
+        <span class="event-pill-timer">${remaining}s</span>
+        <span class="event-pill-fill" style="--ratio:${ratio};"></span>
+      `;
       return;
     }
-    const event = eventById(state.activeEvent.id);
-    if (!event) { $eventPill.classList.add("hidden"); return; }
-    const remaining = Math.max(0, Math.ceil((state.activeEvent.endsAt - Date.now()) / 1000));
-    const ratio = Math.max(0, Math.min(1, (state.activeEvent.endsAt - Date.now()) / EVENT_DURATION_MS));
+    if (state.pendingEvent) {
+      const event = eventById(state.pendingEvent.id);
+      const flavor = EVENT_PENDING_FLAVOR[state.pendingEvent.id];
+      if (!event || !flavor) return;
+      const remaining = Math.max(0, Math.ceil((state.pendingEvent.startsAt - Date.now()) / 1000));
+      $eventPill.classList.remove("hidden");
+      $eventPill.className = `event-pill pending event-${event.id}`;
+      $eventPill.innerHTML = `
+        <span class="event-pill-emoji">${event.emoji}</span>
+        <span class="event-pill-label">${flavor.pillLabel}</span>
+        <span class="event-pill-timer">${remaining}s</span>
+      `;
+      return;
+    }
+    // Idle: ☀️ sunny ambient — the baseline 95%-of-the-time state.
     $eventPill.classList.remove("hidden");
-    $eventPill.className = `event-pill event-${event.id}`;
+    $eventPill.className = "event-pill idle";
     $eventPill.innerHTML = `
-      <span class="event-pill-emoji">${event.emoji}</span>
-      <span class="event-pill-label">${event.name.toUpperCase()}</span>
-      <span class="event-pill-timer">${remaining}s</span>
-      <span class="event-pill-fill" style="--ratio:${ratio};"></span>
+      <span class="event-pill-emoji">☀️</span>
+      <span class="event-pill-label">Sunny</span>
     `;
   }
+
+  // Retro pixelated "STORM BREWING" banner that sits over the pond during the
+  // pending window. Fades in on schedule; fades out when the event actually
+  // starts (the event itself takes center stage from then on).
+  let $weatherBanner = null;
+  function showWeatherBanner(event) {
+    const flavor = EVENT_PENDING_FLAVOR[event.id];
+    if (!flavor) return;
+    if (!$weatherBanner) $weatherBanner = document.getElementById("weather-banner");
+    if (!$weatherBanner) return;
+    $weatherBanner.className = `weather-banner event-${event.id}`;
+    $weatherBanner.innerHTML = `
+      <span class="weather-banner-icon">${flavor.bannerIcon}</span>
+      <span class="weather-banner-text">${event.name.toUpperCase()} ${flavor.verb}</span>
+    `;
+  }
+  function hideWeatherBanner() {
+    if (!$weatherBanner) $weatherBanner = document.getElementById("weather-banner");
+    if (!$weatherBanner) return;
+    $weatherBanner.className = "weather-banner hidden";
+    $weatherBanner.innerHTML = "";
+  }
+
+  // Dev hook: skip the pending window so the active event fires next tick.
+  window.__skipPending = () => {
+    if (!state.pendingEvent) return "no pending event";
+    state.pendingEvent.startsAt = Date.now() - 1;
+    return `advanced ${state.pendingEvent.id}`;
+  };
 
   function showEventStartNotif(event) {
     const n = document.createElement("div");
@@ -3113,6 +3253,7 @@
     renderDecorations();
     renderEdgeFlora();
     renderMuteToggle();
+    renderWeatherPill();
     for (let i = 0; i < MIN_AMBIENT; i++) spawnAmbient();
     // V6 prime a couple clouds so the sky isn't empty on first load.
     spawnSkyCloud();
