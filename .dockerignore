@@ -1,0 +1,17 @@
+.git
+.gitignore
+.DS_Store
+**/.DS_Store
+*.log
+screenshots/
+scripts/
+Dockerfile
+.dockerignore
+.railwayignore
+*.md
+.env
+.env.*
+*.pem
+*.key
+id_rsa
+id_ed25519

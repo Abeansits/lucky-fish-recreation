@@ -5,6 +5,21 @@
 (() => {
   "use strict";
 
+  // ---------- Analytics ----------
+  // PostHog snippet in index.html; this helper is no-op if it failed to load
+  // (ad blocker, offline, CSP) so analytics never breaks the game.
+  function track(event, props) {
+    try {
+      const ph = window.posthog;
+      if (ph && typeof ph.capture === "function") ph.capture(event, props || {});
+    } catch (e) { /* swallow */ }
+  }
+  const sessionStartMs = Date.now();
+  let sessionCasts = 0;
+  let sessionCatches = 0;
+  let sessionEnded = false;
+  const sessionSpecies = new Set();
+
   // ---------- Data ----------
 
   /** @type {{id:string, name:string, emoji:string, rarity:Rarity, hue:number}[]} */
@@ -38,9 +53,10 @@
     { id: "nessie",     name: "Nessie",         emoji: "🦖", rarity: "mythic", hue: 0 },
     { id: "giantsquid", name: "Giant Squid",    emoji: "🦑", rarity: "mythic", hue: 0 },
     { id: "turtle",     name: "Ancient Turtle", emoji: "🐢", rarity: "mythic", hue: 0 },
-    // V10: the rarest fish in the pond. `weight` override drops it to ~1/4 the
-    // base mythic weight — in-tier but still the top of the ladder.
-    { id: "chickennugget", name: "Chicken Nugget Fish", emoji: "🍗", rarity: "mythic", hue: 0, weight: 0.25 },
+    // V10: the rarest fish in the pond. `weight` override keeps it below the
+    // other mythics but still findable in a reasonable play session. V12
+    // bumped from 0.25 → 0.6 after kid-testing found it basically unobtainable.
+    { id: "chickennugget", name: "Chicken Nugget Fish", emoji: "🍗", rarity: "mythic", hue: 0, weight: 0.6 },
   ];
 
   // V8.1 pacing tune (25-min completion was too fast). Legendary + mythic
@@ -49,6 +65,54 @@
   const TIER_WEIGHT = { common: 40, uncommon: 30, rare: 20, legendary: 6, mythic: 1 };
   const TIER_COLOR  = { common: "#4caf50", uncommon: "#3a8dde", rare: "#a05ad8", legendary: "#f2b33a", mythic: "#d83bff" };
   const TIER_LABEL  = { common: "Common", uncommon: "Uncommon", rare: "Rare", legendary: "Legendary", mythic: "Mythic" };
+
+  // V12: pond events. Rare weather windows during which fish have a chance to
+  // come up "mutated" — themed cosmetic variants that sell for 3× the normal
+  // price. Events last ~60s; trigger probability is 0.5% per cast (so roughly
+  // 1 event every 10 min of steady casting). Three flavors for now — weather-
+  // themed so it reads intuitively to a 6yo and reuses the existing sky zone.
+  const EVENTS = [
+    { id: "storm",   name: "Storm",       emoji: "⚡",  mutationId: "electric",  mutationAdj: "Electric" },
+    { id: "rainbow", name: "Rainbow",     emoji: "🌈", mutationId: "prismatic", mutationAdj: "Prismatic" },
+    { id: "moon",    name: "Full Moon",   emoji: "🌕", mutationId: "lunar",     mutationAdj: "Lunar" },
+  ];
+  const MUTATIONS = {
+    electric:  { id: "electric",  adj: "Electric",  color: "#58c8ff", glow: "rgba(88, 200, 255, 0.65)",  icon: "⚡" },
+    prismatic: { id: "prismatic", adj: "Prismatic", color: "#ff7ad0", glow: "rgba(255, 122, 208, 0.55)", icon: "🌈" },
+    lunar:     { id: "lunar",     adj: "Lunar",     color: "#e8e9ff", glow: "rgba(232, 233, 255, 0.7)",  icon: "🌕" },
+  };
+  const EVENT_DURATION_MS = 60_000;
+  const EVENT_CHANCE_PER_CAST = 0.005;
+  const MUTATION_CHANCE_IN_EVENT = 0.10;
+  const MUTATION_MULT = 3; // pearls multiplier; stacks with shiny's 10×
+  function eventById(id) { return EVENTS.find(e => e.id === id); }
+  function mutationById(id) { return MUTATIONS[id]; }
+
+  // V12: junk catches. ~10% of casts reel up something useless (no pearls, no
+  // buff, no album). Keeps the pond feeling real and adds "aww" moments that
+  // make the good catches feel better by contrast.
+  const JUNK = [
+    { id: "boot",  name: "Old Boot",       emoji: "🥾" },
+    { id: "bag",   name: "Trash Bag",      emoji: "🗑️" },
+    { id: "teddy", name: "Old Teddy Bear", emoji: "🧸" },
+    { id: "can",   name: "Rusty Can",      emoji: "🥫" },
+    { id: "sock",  name: "Soggy Sock",     emoji: "🧦" },
+  ];
+  const JUNK_CHANCE = 0.10;
+  const JUNK_FLAVOR = [
+    "Not much of a catch.",
+    "Oh no, that's not a fish!",
+    "Someone lost this…",
+    "Aww, junk.",
+    "Yuck!",
+    "The pond burped that up.",
+  ];
+  function pickJunk() { return JUNK[Math.floor(Math.random() * JUNK.length)]; }
+  function junkById(id) { return JUNK.find(j => j.id === id); }
+
+  // ---------- V12: Event lifecycle ----------
+  // Forward-declared so cast() can reference them before definition below.
+  let maybeStartEvent, tickEvent, endEvent;
 
   // V10 redesign: rods are no longer auto-unlocked. Most need just pearls;
   // mid + top rods need a catch milestone unlocked before you can buy. This
@@ -130,10 +194,14 @@
 
   // ---------- V3 additions ----------
 
-  // 1 / SHINY_DENOM roll on every catch. Codex called: 1/500 lands a shiny
-  // about every ~12 min of casual play — rare enough to feel special, not so
-  // rare a session goes by without one.
-  const SHINY_DENOM = 500;
+  // 1 / SHINY_DENOM roll on every catch. V12 bumped from 500 → 120 after
+  // kid-testing — 1/500 meant a full session could pass without a single
+  // shiny, which killed the "wow moment". 1/120 lands one every ~4-5 min
+  // of casual play — still a treat, but actually attainable for young kids.
+  const SHINY_DENOM = 120;
+  // How long the cast button stays disabled while the shiny celebration
+  // plays out. Must cover: overlay (2500ms) + banner pop (1700ms staggered).
+  const SHINY_CELEBRATION_MS = 2600;
 
   // Pearl payouts on eat. Shiny grants 10× the tier base.
   const PEARLS_PER_TIER = { common: 1, uncommon: 3, rare: 10, legendary: 30, mythic: 100 };
@@ -172,8 +240,95 @@
   // V10 redesign: eat vs sell split + rod store rework. Bumping the key
   // deliberately wipes V3 saves so the old pearls/unlocks can't leak into
   // the new economy. No legacy migration on purpose.
-  const STORAGE_KEY = "luckyFish.v4";
-  const LEGACY_KEYS = [];
+  // V12: multi-profile save slots. Profile list lives at `luckyFish.profiles`,
+  // each slot's progression lives at `luckyFish.v4.<slotId>`. The old single
+  // `luckyFish.v4` save migrates into slot-1 on first boot after upgrade.
+  const LEGACY_STORAGE_KEY = "luckyFish.v4";
+  const PROFILES_KEY = "luckyFish.profiles";
+  const SLOT_PREFIX = "luckyFish.v4.";
+  const MAX_SLOTS = 4;
+  const PROFILE_EMOJIS = ["🎣","🐠","🐟","🦈","🐙","🐢","🦆","🐉","🧜","🐡","🐋","⭐","🌙","🌈","🍀","🪵","🫧","🦑","🐬","🦐"];
+  const SKIP_PICKER_FLAG = "luckyFish.skipPicker";
+
+  function slotStorageKey(slotId) { return SLOT_PREFIX + slotId; }
+
+  function loadProfiles() {
+    try {
+      const raw = localStorage.getItem(PROFILES_KEY);
+      if (!raw) return { active: null, slots: [] };
+      const parsed = JSON.parse(raw);
+      const slots = Array.isArray(parsed.slots) ? parsed.slots.filter(s => s && s.id) : [];
+      const active = slots.some(s => s.id === parsed.active) ? parsed.active : (slots[0]?.id ?? null);
+      return { active, slots };
+    } catch (e) {
+      return { active: null, slots: [] };
+    }
+  }
+
+  function saveProfiles(profiles) {
+    try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)); } catch (e) {}
+  }
+
+  // On first boot after the multi-profile upgrade: adopt the old single-save
+  // key as Player 1 so nobody loses their pearls/album.
+  function ensureProfilesExist() {
+    let profiles = loadProfiles();
+    if (profiles.slots.length > 0) return profiles;
+    const slotId = "slot-1";
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacy) {
+      try { localStorage.setItem(slotStorageKey(slotId), legacy); } catch (e) {}
+      try { localStorage.removeItem(LEGACY_STORAGE_KEY); } catch (e) {}
+    }
+    profiles = {
+      active: slotId,
+      slots: [{ id: slotId, name: "Player 1", emoji: "🎣", createdAt: Date.now() }],
+    };
+    saveProfiles(profiles);
+    return profiles;
+  }
+
+  const profiles = ensureProfilesExist();
+  const STORAGE_KEY = slotStorageKey(profiles.active);
+
+  function activeProfile() {
+    return profiles.slots.find(s => s.id === profiles.active) || null;
+  }
+
+  // Peek at another slot's saved data without disturbing the active `prog`.
+  // Used to show pearls + discovery count on each tile in the picker.
+  function peekSlotStats(slotId) {
+    try {
+      const raw = localStorage.getItem(slotStorageKey(slotId));
+      if (!raw) return { pearls: 0, discovered: 0, total: 0 };
+      const p = JSON.parse(raw);
+      return {
+        pearls: Number(p?.pearls) || 0,
+        discovered: Object.keys(p?.discovered || {}).length,
+        total: Number(p?.totals?.all) || 0,
+      };
+    } catch (e) { return { pearls: 0, discovered: 0, total: 0 }; }
+  }
+
+  function createProfile({ name, emoji }) {
+    const trimmed = (name || "").trim().slice(0, 14) || "Player";
+    const used = new Set(profiles.slots.map(s => s.id));
+    let i = 1, slotId;
+    do { slotId = `slot-${i++}`; } while (used.has(slotId));
+    const slot = { id: slotId, name: trimmed, emoji: emoji || "🎣", createdAt: Date.now() };
+    profiles.slots.push(slot);
+    profiles.active = slotId;
+    saveProfiles(profiles);
+    return slot;
+  }
+
+  function switchToProfile(slotId) {
+    if (!profiles.slots.some(s => s.id === slotId)) return;
+    profiles.active = slotId;
+    saveProfiles(profiles);
+    try { sessionStorage.setItem(SKIP_PICKER_FLAG, "1"); } catch (e) {}
+    location.reload();
+  }
 
   function freshProgression() {
     return {
@@ -192,19 +347,18 @@
       decorationsOwned: {},
       muted: false,
       names: {}, // V9: speciesId -> chosen name (legendary+mythic only)
+      // V12: mutation tracking. Keyed `<fishId>:<mutationId>` → first-caught ms.
+      mutationsDiscovered: {},
+      mutationsCaught: 0,
+      // Analytics: achievement id -> first-unlocked ms. Used to fire
+      // `achievement_unlocked` exactly once per achievement per profile.
+      achievementsUnlocked: {},
     };
   }
 
   function loadProgression() {
     try {
-      let raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) {
-        // Migrate V2 → V3: same schema, just carries pearls/decorations in at 0/{}.
-        for (const key of LEGACY_KEYS) {
-          const legacy = localStorage.getItem(key);
-          if (legacy) { raw = legacy; break; }
-        }
-      }
+      const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return freshProgression();
       const parsed = JSON.parse(raw);
       const fresh = freshProgression();
@@ -222,6 +376,9 @@
         decorationsOwned: { ...(parsed.decorationsOwned || {}) },
         muted: parsed.muted === true,
         names: { ...(parsed.names || {}) },
+        mutationsDiscovered: { ...(parsed.mutationsDiscovered || {}) },
+        mutationsCaught: Number(parsed.mutationsCaught) || 0,
+        achievementsUnlocked: { ...(parsed.achievementsUnlocked || {}) },
       };
     } catch (e) {
       return freshProgression();
@@ -254,8 +411,20 @@
     settingsOpen: false,
     namingOpen: false,
     namingSpecies: null, // V9: fishId of the species currently being named
+    profileOpen: false,
+    createProfileOpen: false,
+    createProfileEmoji: "🎣", // currently selected emoji in the create-profile form
     eatingAll: false,
     autoReel: null,       // { endsAt, totalMs } — set by shiny-eat, chains casts until expiry
+    // V12: timestamp until which the cast button stays locked because a shiny
+    // celebration is in progress. 0 = no lock. Keeps the kid from spamming
+    // through the moment (and racing the fanfare audio + banner animation).
+    shinyLockUntil: 0,
+    // V12: active pond event (weather window enabling mutation catches).
+    // Shape: { id: "storm"|"rainbow"|"moon", endsAt: ms } or null. Session-
+    // only — doesn't persist across reloads by design (events are a moment).
+    activeEvent: null,
+    eventTickerId: null, // setInterval id for the countdown pill refresh
   };
 
   // ---------- DOM ----------
@@ -304,6 +473,20 @@
   const $namingTitle = document.getElementById("naming-title");
   const $namingHero = document.getElementById("naming-hero");
   const $namingGrid = document.getElementById("naming-grid");
+  // V12 profiles
+  const $profileOverlay = document.getElementById("profile-overlay");
+  const $profileGrid = document.getElementById("profile-grid");
+  const $profileClose = document.getElementById("profile-close");
+  const $createProfileOverlay = document.getElementById("create-profile-overlay");
+  const $createProfileName = document.getElementById("create-profile-name");
+  const $createProfileEmojis = document.getElementById("create-profile-emojis");
+  const $createProfileSubmit = document.getElementById("create-profile-submit");
+  const $createProfileClose = document.getElementById("create-profile-close");
+  const $switchProfileBtn = document.getElementById("switch-profile-btn");
+  const $activeProfileName = document.getElementById("active-profile-name");
+  const $resetConfirmName = document.getElementById("reset-confirm-name");
+  // V12 events
+  const $eventPill = document.getElementById("event-pill");
 
   // ---------- V8.1 modal helper ----------
   // One place to toggle a modal's visibility + aria-hidden + state flag. Also
@@ -475,6 +658,16 @@
     playFile("eat");
   }
 
+  // V12: a short, low "wah-wah" for junk catches. Two descending triangle
+  // blips — brass-ish and deflating, the opposite of the ascending sell
+  // chime. ~0.35s total so it gets out of the way quickly.
+  function playJunkSound() {
+    if (audioMuted()) return;
+    stopSoundKey("junk");
+    blip({ key: "junk", freq: 380, slideTo: 280, duration: 0.16, type: "triangle", vol: 0.11, attack: 0.01, release: 0.10 });
+    blip({ key: "junk", freq: 280, slideTo: 180, duration: 0.22, type: "triangle", vol: 0.12, attack: 0.01, release: 0.14, at: 0.13 });
+  }
+
   // V10: light "ka-ching" for selling — no sample file, just a short chime
   // so it sits distinct from the chomp sound.
   function playSellSound() {
@@ -527,6 +720,39 @@
     // Soft warm pad under it all
     blip({ key: k, freq: 261, duration: 1.1, type: "triangle", vol: 0.05, at: 0.0 });
     blip({ key: k, freq: 392, duration: 1.1, type: "triangle", vol: 0.05, at: 0.1 });
+  }
+
+  // V12: full SHINY! fanfare for actual shiny catches. Strictly bigger than
+  // playShinySound (which is still reused inside the mythic stack). Layers a
+  // deep bell thump, a noise-burst whoosh, a slower ascending arpeggio, an
+  // extended shimmer tail, and a final resolving bell on top of a sustained
+  // warm pad. ~2.2 seconds of "holy crap, you found one."
+  function playShinyFanfare() {
+    if (audioMuted()) return;
+    stopSoundKey("catch");
+    stopSoundKey("shiny");
+    const k = "shiny";
+    // Deep bell thump at the moment of catch.
+    blip({ key: k, freq: 131, duration: 1.6, type: "sine",     vol: 0.17, attack: 0.02, release: 0.9 });
+    blip({ key: k, freq: 196, duration: 1.3, type: "triangle", vol: 0.10, attack: 0.04, release: 0.6 });
+    // Airy whoosh that sells the "magic happening" moment.
+    noiseBurst({ key: k, duration: 0.55, vol: 0.10, filterFreq: 4200, filterSlide: 400, at: 0.04 });
+    // Ascending arpeggio — slower + louder than playShinySound.
+    const notes = [523, 659, 784, 1046, 1318, 1568, 1975];
+    notes.forEach((f, i) => {
+      blip({ key: k, freq: f,      duration: 0.28, type: "sine",     vol: 0.17, at: i * 0.085 });
+      blip({ key: k, freq: f * 2,  duration: 0.22, type: "triangle", vol: 0.08, at: i * 0.085 });
+    });
+    // Extended shimmer tail — more tinkles, held longer.
+    [2093, 2637, 3136, 2637, 3136, 2637, 2093].forEach((f, i) => {
+      blip({ key: k, freq: f, duration: 0.18, type: "sine", vol: 0.11, at: 0.80 + i * 0.09 });
+    });
+    // Sustained warm pad under the whole thing.
+    blip({ key: k, freq: 261, duration: 2.1, type: "triangle", vol: 0.06, at: 0.0 });
+    blip({ key: k, freq: 392, duration: 2.1, type: "triangle", vol: 0.06, at: 0.12 });
+    // Final resolving bell — lands after the arpeggio peaks.
+    blip({ key: k, freq: 523, duration: 0.9, type: "sine", vol: 0.14, attack: 0.003, release: 0.55, at: 1.25 });
+    blip({ key: k, freq: 784, duration: 0.8, type: "sine", vol: 0.09, attack: 0.003, release: 0.55, at: 1.25 });
   }
 
   function playCrunchCascade(scale = 1.0) {
@@ -629,6 +855,11 @@
     entries.sort((a, b) => {
       const pa = parseInvKey(a[0]);
       const pb = parseInvKey(b[0]);
+      // Junk sinks to the bottom of the list — separate visual group.
+      if (pa.isJunk !== pb.isJunk) return pa.isJunk ? 1 : -1;
+      if (pa.isJunk && pb.isJunk) {
+        return (junkById(pa.junkId)?.name || "").localeCompare(junkById(pb.junkId)?.name || "");
+      }
       const fa = FISH.find(f => f.id === pa.fishId);
       const fb = FISH.find(f => f.id === pb.fishId);
       if (pa.isShiny !== pb.isShiny) return pa.isShiny ? -1 : 1;
@@ -637,23 +868,61 @@
 
     $catches.innerHTML = "";
     for (const [key, count] of entries) {
-      const { fishId, isShiny } = parseInvKey(key);
+      const parsed = parseInvKey(key);
+      if (parsed.isJunk) {
+        const junk = junkById(parsed.junkId);
+        if (!junk) continue;
+        const entry = document.createElement("div");
+        entry.className = "catch-entry is-junk";
+        entry.dataset.entryKey = key;
+        entry.innerHTML = `
+          <div class="catch-card">
+            <div class="catch-bar rarity-junk"></div>
+            <div class="catch-emoji junk-emoji">${junk.emoji}</div>
+            <div class="catch-info">
+              <span class="catch-name">${junk.name}</span>
+              <span class="catch-count">Junk · x${count}</span>
+            </div>
+            <div class="catch-actions">
+              <button class="catch-btn toss-btn" data-key="${key}" aria-label="Toss ${junk.name}">
+                <span class="catch-btn-icon">🗑️</span><span class="catch-btn-val">Toss</span>
+              </button>
+            </div>
+          </div>
+        `;
+        entry.querySelector(".toss-btn").addEventListener("click", (e) => {
+          e.stopPropagation();
+          discardJunk(parsed.junkId);
+        });
+        $catches.appendChild(entry);
+        continue;
+      }
+      const { fishId, isShiny, mutationId } = parsed;
       const fish = FISH.find(f => f.id === fishId);
-      const sellValue = pearlsForCatch(fish, isShiny);
+      const sellValue = pearlsForCatch(fish, isShiny, mutationId);
+      const mutation = mutationId ? mutationById(mutationId) : null;
       const entry = document.createElement("div");
-      entry.className = "catch-entry" + (isShiny ? " is-shiny" : "");
+      const mutClass = mutation ? ` is-mutation mut-${mutation.id}` : "";
+      entry.className = "catch-entry" + (isShiny ? " is-shiny" : "") + mutClass;
       entry.dataset.entryKey = key;
       const starPrefix = isShiny ? '<span class="catch-star">✨</span> ' : "";
-      const nameLabel = `${starPrefix}${isShiny ? "Shiny " : ""}${fish.name}`;
+      const mutPrefix = mutation ? `<span class="catch-mut-icon" title="${mutation.adj}">${mutation.icon}</span> ` : "";
+      const adjParts = [];
+      if (isShiny) adjParts.push("Shiny");
+      if (mutation) adjParts.push(mutation.adj);
+      const nameLabel = `${starPrefix}${mutPrefix}${adjParts.join(" ")}${adjParts.length ? " " : ""}${fish.name}`;
+      const countLabel = mutation
+        ? `${TIER_LABEL[fish.rarity]} · ${mutation.adj} · x${count}`
+        : `${TIER_LABEL[fish.rarity]} · x${count}`;
       entry.innerHTML = `
         <span class="catch-swipe-hint sell">🫧 Sell</span>
         <span class="catch-swipe-hint eat">🍽️ Eat</span>
         <div class="catch-card">
           <div class="catch-bar rarity-${fish.rarity}"></div>
-          <div class="catch-emoji ${isShiny ? "shiny" : ""}">${fishArt(fish, { isShiny })}</div>
+          <div class="catch-emoji ${isShiny ? "shiny" : ""} ${mutation ? "mutation" : ""}">${fishArt(fish, { isShiny })}</div>
           <div class="catch-info">
             <span class="catch-name">${nameLabel}</span>
-            <span class="catch-count">${TIER_LABEL[fish.rarity]} · x${count}</span>
+            <span class="catch-count">${countLabel}</span>
           </div>
           <div class="catch-actions">
             <button class="catch-btn sell-btn" data-key="${key}" aria-label="Sell for ${sellValue} pearls">
@@ -668,13 +937,13 @@
       const card = entry.querySelector(".catch-card");
       entry.querySelector(".sell-btn").addEventListener("click", (e) => {
         e.stopPropagation();
-        sellFish(fishId, isShiny);
+        sellFish(fishId, isShiny, mutationId);
       });
       entry.querySelector(".eat-btn").addEventListener("click", (e) => {
         e.stopPropagation();
-        eatFish(fishId, isShiny);
+        eatFish(fishId, isShiny, mutationId);
       });
-      attachCatchSwipe(entry, card, fishId, isShiny);
+      attachCatchSwipe(entry, card, fishId, isShiny, mutationId);
       $catches.appendChild(entry);
     }
 
@@ -685,7 +954,7 @@
   // their own click — we just skip drag-tracking when the pointerdown started
   // on a button.
   const SWIPE_COMMIT_RATIO = 0.45; // fraction of card width
-  function attachCatchSwipe(entry, card, fishId, isShiny) {
+  function attachCatchSwipe(entry, card, fishId, isShiny, mutationId = null) {
     let startX = 0, dx = 0, dragging = false, committed = false;
     let pointerId = null;
     card.addEventListener("pointerdown", (e) => {
@@ -716,10 +985,10 @@
       const threshold = width * SWIPE_COMMIT_RATIO;
       if (!committed && dx <= -threshold) {
         committed = true;
-        sellFish(fishId, isShiny);
+        sellFish(fishId, isShiny, mutationId);
       } else if (!committed && dx >= threshold) {
         committed = true;
-        eatFish(fishId, isShiny);
+        eatFish(fishId, isShiny, mutationId);
       } else {
         // Snap back
         card.style.transition = "transform 180ms cubic-bezier(.3,1.5,.5,1)";
@@ -869,16 +1138,35 @@
     return weighted[weighted.length - 1].fish; // fallback (floating-point tail)
   }
 
-  function invKey(fishId, isShiny) {
-    return isShiny ? `${fishId}:shiny` : fishId;
+  // V12: inventory keys now support an optional `mut-<mutationId>` suffix.
+  // Shape: `fishId` | `fishId:shiny` | `fishId:mut-electric` | `fishId:shiny:mut-electric`.
+  function invKey(fishId, isShiny, mutationId = null) {
+    let k = isShiny ? `${fishId}:shiny` : fishId;
+    if (mutationId) k += `:mut-${mutationId}`;
+    return k;
   }
+  function junkInvKey(junkId) { return `junk:${junkId}`; }
   function parseInvKey(key) {
-    const [fishId, shinyTag] = key.split(":");
-    return { fishId, isShiny: shinyTag === "shiny" };
+    const parts = key.split(":");
+    if (parts[0] === "junk") {
+      return { isJunk: true, junkId: parts[1], fishId: null, isShiny: false, mutationId: null };
+    }
+    const fishId = parts[0];
+    let isShiny = false;
+    let mutationId = null;
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i] === "shiny") isShiny = true;
+      else if (parts[i].startsWith("mut-")) mutationId = parts[i].slice(4);
+    }
+    return { isJunk: false, fishId, isShiny, mutationId, junkId: null };
   }
 
-  function addFish(fishId, isShiny, count = 1) {
-    const key = invKey(fishId, isShiny);
+  function addFish(fishId, isShiny, count = 1, mutationId = null) {
+    const key = invKey(fishId, isShiny, mutationId);
+    state.inventory.set(key, (state.inventory.get(key) || 0) + count);
+  }
+  function addJunk(junkId, count = 1) {
+    const key = junkInvKey(junkId);
     state.inventory.set(key, (state.inventory.get(key) || 0) + count);
   }
 
@@ -893,6 +1181,12 @@
     state.casting = true;
     $castBtn.disabled = true;
 
+    sessionCasts += 1;
+    track("cast", {
+      rod_id: state.selectedRodId,
+      session_casts_count: sessionCasts,
+    });
+
     playCast();
     $pond.classList.add("casting");
     $castIndicator.classList.add("hidden");
@@ -906,35 +1200,76 @@
     // V5 slot-reel fix — PRE-PICK the winning fish + shiny flag here, so the
     // reel can visibly land on the actual winner. resolveCatch consumes these.
     const isGift = state.pendingDailyGift && undiscoveredSpecies().length > 0;
-    let winner = pickFish({ forceUndiscovered: isGift });
-    // Dev/test hook: force the next catch to a specific rarity (e.g. "mythic").
-    // Normal play never sets window.__forceRarity.
-    if (window.__forceRarity) {
-      const pool = FISH.filter(f => f.rarity === window.__forceRarity);
-      if (pool.length) winner = pool[Math.floor(Math.random() * pool.length)];
-      window.__forceRarity = null;
+    // V12: 10% of casts reel up junk — but never on a daily-gift cast (that'd
+    // feel punishing), and never when a test hook is forcing a rarity/shiny.
+    const forcing = window.__forceRarity || window.__forceShiny;
+    const isJunk = !isGift && !forcing && Math.random() < JUNK_CHANCE;
+    let winner;
+    if (isJunk) {
+      winner = pickJunk();
+    } else {
+      winner = pickFish({ forceUndiscovered: isGift });
+      // Dev/test hook: force the next catch to a specific rarity (e.g. "mythic").
+      // Normal play never sets window.__forceRarity.
+      if (window.__forceRarity) {
+        const pool = FISH.filter(f => f.rarity === window.__forceRarity);
+        if (pool.length) winner = pool[Math.floor(Math.random() * pool.length)];
+        window.__forceRarity = null;
+      }
     }
-    const isShiny = window.__forceShiny === true || Math.random() < (1 / SHINY_DENOM);
+    const isShiny = !isJunk && (window.__forceShiny === true || Math.random() < (1 / SHINY_DENOM));
     if (window.__forceShiny) window.__forceShiny = false;
-    state.pendingCatch = { fish: winner, isShiny, isGift };
+    // V12: if an event is active, roll 10% for a mutation on a fish catch.
+    // Junk + gift casts bypass this. Force-mutation dev hook for testing.
+    let mutationId = null;
+    if (!isJunk && state.activeEvent) {
+      const rollMut = window.__forceMutation === true || Math.random() < MUTATION_CHANCE_IN_EVENT;
+      if (rollMut) {
+        const ev = eventById(state.activeEvent.id);
+        if (ev) mutationId = ev.mutationId;
+      }
+      if (window.__forceMutation) window.__forceMutation = false;
+    }
+    state.pendingCatch = { fish: winner, isShiny, isGift, isJunk, mutationId };
+    // Roll for a new event at the tail of cast — only when none is running
+    // and we didn't just pick a junk/gift catch (don't stack specialness).
+    if (!state.activeEvent && !isJunk && !isGift) maybeStartEvent();
 
     // V4: slot-machine reel during the suspense beat — now lands on `winner`.
     startCastReel(duration, winner);
 
     setTimeout(() => {
       // Brief landing pause so the winner is visibly centered before the reel
-      // hides and the catch notification takes over.
-      flashReelRarity(winner.rarity);
+      // hides and the catch notification takes over. Junk has no rarity — tint
+      // the reel neutral so it visually reads as "meh" before the notif.
+      flashReelRarity(isJunk ? "junk" : winner.rarity);
       setTimeout(() => {
         stopCastReel();
         resolveCatch();
         state.casting = false;
-        $castBtn.disabled = false;
         $pond.classList.remove("casting");
         $pond.style.animationDuration = "";
+        // V12: if a shiny was caught, hold the cast button disabled for the
+        // duration of the celebration so the kid can't tap through it.
+        releaseCastButton();
         if (isAutoReelActive()) scheduleNextAutoCast();
       }, 260);
     }, duration);
+  }
+
+  function releaseCastButton() {
+    const now = Date.now();
+    if (state.shinyLockUntil && now < state.shinyLockUntil) {
+      const remaining = state.shinyLockUntil - now;
+      $castBtn.classList.add("shiny-lock");
+      setTimeout(() => {
+        state.shinyLockUntil = 0;
+        $castBtn.disabled = false;
+        $castBtn.classList.remove("shiny-lock");
+      }, remaining);
+    } else {
+      $castBtn.disabled = false;
+    }
   }
 
   // V4 cast reel — fast scroll → deceleration → land, now winner-aware (V5).
@@ -989,7 +1324,7 @@
 
   function stopCastReel() {
     $castReel.classList.add("hidden");
-    $castReel.classList.remove("landing", "rarity-common", "rarity-uncommon", "rarity-rare", "rarity-legendary");
+    $castReel.classList.remove("landing", "rarity-common", "rarity-uncommon", "rarity-rare", "rarity-legendary", "rarity-mythic", "rarity-junk");
   }
 
   // V4 — paint the reel with a rarity tint right before it stops, so the color
@@ -1003,28 +1338,47 @@
     // V5: consume pre-picked catch from cast() so the reel actually lands on
     // the fish we're crediting. Fallback path only fires if cast() was skipped
     // (shouldn't happen in normal flow).
-    let fish, isShiny, isGift;
+    let fish, isShiny, isGift, isJunk, mutationId;
     if (state.pendingCatch) {
-      ({ fish, isShiny, isGift } = state.pendingCatch);
+      ({ fish, isShiny, isGift, isJunk, mutationId } = state.pendingCatch);
       state.pendingCatch = null;
     } else {
       isGift = state.pendingDailyGift && undiscoveredSpecies().length > 0;
       fish = pickFish({ forceUndiscovered: isGift });
       isShiny = Math.random() < (1 / SHINY_DENOM);
+      isJunk = false;
+      mutationId = null;
     }
     if (isGift) {
       state.pendingDailyGift = false;
       prog.lastGiftDate = todayKey();
     }
 
+    // V12: junk short-circuits the fish pipeline — no album, no buff, no
+    // celebration, no milestones. Just a low-key notif and an entry in the bag.
+    if (isJunk) {
+      addJunk(fish.id, 1);
+      playJunkSound();
+      showJunkNotification(fish);
+      renderCatches();
+      saveProgression();
+      return;
+    }
+
     const isFirstCatch = !prog.discovered[fish.id];
     const isFirstShiny = isShiny && !prog.shinyDiscovered[fish.id];
+    // V12: mutations stack with shiny. A "shiny electric salmon" is its own
+    // flex. We still run the shiny celebration on top but add a mutation notif.
+    const isFirstMutation = mutationId && !prog.mutationsDiscovered[`${fish.id}:${mutationId}`];
 
-    recordCatch(fish, isShiny);
+    recordCatch(fish, isShiny, mutationId);
 
     // Audio + celebration: shiny trumps everything else; mythic trumps legendary.
     if (isShiny) {
-      playShinySound();
+      // V12: fanfare (bigger sound), full sequence (longer visuals + banner),
+      // notification card, and lock the cast button for the celebration window.
+      state.shinyLockUntil = Date.now() + SHINY_CELEBRATION_MS;
+      playShinyFanfare();
       showShinySequence(fish, { isFirstShiny });
       showShinyCelebration(fish, { isFirstShiny });
     } else if (fish.rarity === "mythic") {
@@ -1032,6 +1386,12 @@
     } else if (fish.rarity === "legendary") {
       // V4 full treatment — hit-stop + screen shake + LEGENDARY banner + confetti waves.
       playLegendarySequence(fish, { isFirstCatch, isGift });
+    } else if (mutationId) {
+      // Mutation on a non-shiny, non-legendary catch — a distinct moment that
+      // still feels rewarding. Play a brighter catch sound + sparkle burst.
+      playCatchSound(fish.rarity);
+      showMutationCatchNotification(fish, mutationId, { isFirstMutation });
+      burstCelebration({ emoji: MUTATIONS[mutationId].icon, hue: 0 }, { count: 14, distMin: 160, distMax: 320 });
     } else if (isFirstCatch) {
       playCatchSound(fish.rarity === "common" ? "common" : fish.rarity); // uses the matching MP3
       showFirstCatchCelebration(fish, { fromGift: isGift });
@@ -1041,17 +1401,23 @@
       showCatchNotification(fish, { fromGift: isGift });
     }
 
+    // If we landed a mutation on top of a legendary/mythic, still show the
+    // mutation notif so the kid sees the extra value.
+    if (mutationId && (fish.rarity === "legendary" || fish.rarity === "mythic" || isShiny)) {
+      setTimeout(() => showMutationCatchNotification(fish, mutationId, { isFirstMutation }), 400);
+    }
+
     // Double Catch roll (independent, after the primary catch is committed).
-    // Shiny flag carries to the duplicate — same caught fish.
+    // Shiny/mutation flags carry to the duplicate — same caught fish.
     const dc = state.buffs.get("double");
     if (dc && Math.random() < dc.value) {
-      addFish(fish.id, isShiny, 1);
-      recordCatchCount(fish, isShiny);
+      addFish(fish.id, isShiny, 1, mutationId);
+      recordCatchCount(fish, isShiny, mutationId);
       showDoubleCatchNotification(fish);
     }
 
     checkMilestones(fish, isShiny);
-    addFish(fish.id, isShiny, 1);
+    addFish(fish.id, isShiny, 1, mutationId);
     renderCatches();
     renderNextGoal();
     renderRods();
@@ -1060,17 +1426,32 @@
     saveProgression();
   }
 
-  function recordCatch(fish, isShiny) {
+  function recordCatch(fish, isShiny, mutationId = null) {
     if (!prog.discovered[fish.id]) prog.discovered[fish.id] = Date.now();
     if (isShiny && !prog.shinyDiscovered[fish.id]) prog.shinyDiscovered[fish.id] = Date.now();
-    recordCatchCount(fish, isShiny);
+    if (mutationId) {
+      const mkey = `${fish.id}:${mutationId}`;
+      if (!prog.mutationsDiscovered[mkey]) prog.mutationsDiscovered[mkey] = Date.now();
+    }
+    recordCatchCount(fish, isShiny, mutationId);
   }
 
-  function recordCatchCount(fish, isShiny) {
+  function recordCatchCount(fish, isShiny, mutationId = null) {
     prog.totals.all += 1;
     prog.totals[fish.rarity] = (prog.totals[fish.rarity] || 0) + 1;
     if (isShiny) prog.totals.shinies = (prog.totals.shinies || 0) + 1;
+    if (mutationId) prog.mutationsCaught = (prog.mutationsCaught || 0) + 1;
     prog.totals.bySpecies[fish.id] = (prog.totals.bySpecies[fish.id] || 0) + 1;
+
+    sessionCatches += 1;
+    sessionSpecies.add(fish.id);
+    track("fish_caught", {
+      species_id: fish.id,
+      species_name: fish.name,
+      fish_tier: fish.rarity,
+      rod_id: state.selectedRodId,
+    });
+
     // V10: rods are bought in the shop, not auto-unlocked. We just nudge the
     // user when a catch first clears a rod's milestone so they know to check
     // the shop.
@@ -1080,6 +1461,7 @@
         showRodUnlockedForPurchase(rod);
       }
     }
+    syncAchievementUnlocks();
   }
 
   function rodMilestoneMet(rod) {
@@ -1129,10 +1511,11 @@
     });
   }
 
-  function pearlsForCatch(fish, isShiny) {
+  function pearlsForCatch(fish, isShiny, mutationId = null) {
     const base = PEARLS_PER_TIER[fish.rarity] || 1;
     const starMult = fish.id === getTodaysStarFishId() ? 2 : 1;
-    return (isShiny ? base * SHINY_MULT : base) * starMult;
+    const mutMult = mutationId ? MUTATION_MULT : 1;
+    return (isShiny ? base * SHINY_MULT : base) * starMult * mutMult;
   }
 
   // V8 bonus: one fish per calendar day gets a gentle gold highlight in the
@@ -1151,8 +1534,8 @@
 
   // V10: eating gives ONLY the tier buff (no pearls). Shiny still triggers the
   // 20-second auto-reel. The strategic flip-side to selling.
-  function eatFish(fishId, isShiny) {
-    const key = invKey(fishId, isShiny);
+  function eatFish(fishId, isShiny, mutationId = null) {
+    const key = invKey(fishId, isShiny, mutationId);
     const count = state.inventory.get(key) || 0;
     if (count <= 0) return;
     const fish = FISH.find(f => f.id === fishId);
@@ -1168,16 +1551,66 @@
     saveProgression();
   }
 
+  // V12: tossing junk just removes it. Zero pearls; the notif is a one-liner.
+  function discardJunk(junkId) {
+    const key = junkInvKey(junkId);
+    const count = state.inventory.get(key) || 0;
+    if (count <= 0) return;
+    const junk = junkById(junkId);
+    state.inventory.set(key, count - 1);
+    const n = document.createElement("div");
+    n.className = "notif";
+    n.innerHTML = `
+      <div class="notif-emoji">🗑️</div>
+      <div class="notif-text">
+        <span class="notif-title">Tossed ${junk.name}</span>
+      </div>
+    `;
+    pushNotif(n, 1200);
+    renderCatches();
+    saveProgression();
+  }
+
+  function showMutationCatchNotification(fish, mutationId, { isFirstMutation = false } = {}) {
+    const mutation = mutationById(mutationId);
+    if (!mutation) return;
+    const n = document.createElement("div");
+    n.className = `notif celebrate event-notif mut-${mutation.id}`;
+    n.innerHTML = `
+      <div class="notif-emoji" style="filter: drop-shadow(0 0 8px ${mutation.glow});">${mutation.icon}${fishArt(fish, { cls: "big" })}</div>
+      <div class="notif-text">
+        <span class="notif-hat">${mutation.icon} ${isFirstMutation ? "FIRST " : ""}${mutation.adj.toUpperCase()} MUTATION</span>
+        <span class="notif-title">${mutation.adj} ${fish.name}!</span>
+        <span class="notif-sub">Sells for ${pearlsForCatch(fish, false, mutationId).toLocaleString()} 🫧 (${MUTATION_MULT}× base)</span>
+      </div>
+    `;
+    pushNotif(n, isFirstMutation ? NOTIF_HOLD.big : NOTIF_HOLD.regular);
+  }
+
+  function showJunkNotification(junk) {
+    const sub = JUNK_FLAVOR[Math.floor(Math.random() * JUNK_FLAVOR.length)];
+    const n = document.createElement("div");
+    n.className = "notif rarity-junk";
+    n.innerHTML = `
+      <div class="notif-emoji">${junk.emoji}</div>
+      <div class="notif-text">
+        <span class="notif-title">${junk.name}</span>
+        <span class="notif-sub">${sub}</span>
+      </div>
+    `;
+    pushNotif(n, 1800);
+  }
+
   // V10: selling gives ONLY pearls (no buff, no auto-reel on shiny — just
   // fat pearl payout). The economic path; money for rods + decorations.
-  function sellFish(fishId, isShiny) {
-    const key = invKey(fishId, isShiny);
+  function sellFish(fishId, isShiny, mutationId = null) {
+    const key = invKey(fishId, isShiny, mutationId);
     const count = state.inventory.get(key) || 0;
     if (count <= 0) return;
     const fish = FISH.find(f => f.id === fishId);
     state.inventory.set(key, count - 1);
 
-    const gained = pearlsForCatch(fish, isShiny);
+    const gained = pearlsForCatch(fish, isShiny, mutationId);
     const srcEl = document.querySelector(`[data-entry-key="${key}"]`) || $catches;
     grantPearls(gained, { atEl: srcEl });
     playSellSound();
@@ -1202,6 +1635,7 @@
     pop.style.setProperty("--y", `0px`);
     document.body.appendChild(pop);
     setTimeout(() => pop.remove(), 950);
+    syncAchievementUnlocks();
   }
 
   function renderPearls() {
@@ -1230,15 +1664,17 @@
     let staggerDelay = 0;
     const perItemDelay = 70;
     for (const [key, count] of entries) {
-      const { fishId, isShiny } = parseInvKey(key);
-      const fish = FISH.find(f => f.id === fishId);
-      if (!fish) continue;
+      const parsed = parseInvKey(key);
+      const item = parsed.isJunk
+        ? junkById(parsed.junkId)
+        : FISH.find(f => f.id === parsed.fishId);
+      if (!item) continue;
       const entryEl = document.querySelector(`[data-entry-key="${key}"]`);
       const rect = entryEl ? entryEl.getBoundingClientRect() : catchesRect;
       const startX = rect.left + 50;
       const startY = rect.top + rect.height / 2;
       setTimeout(() => {
-        flyingFish(fish, isShiny, startX, startY, targetX, targetY, count);
+        flyingFish(item, parsed.isShiny, startX, startY, targetX, targetY, count);
         if (sfx) sfx(entries.length);
       }, staggerDelay);
       staggerDelay += perItemDelay;
@@ -1248,7 +1684,9 @@
 
   function eatAll() {
     if (state.eatingAll) return;
-    const entries = [...state.inventory.entries()].filter(([, n]) => n > 0);
+    // V12: junk can't be eaten — exclude it entirely so it stays in the bag.
+    const entries = [...state.inventory.entries()]
+      .filter(([k, n]) => n > 0 && !parseInvKey(k).isJunk);
     if (entries.length === 0) return;
     state.eatingAll = true;
 
@@ -1282,7 +1720,8 @@
           updateBuffPills();
         }, i * BUFF_STAGGER_MS);
       });
-      state.inventory.clear();
+      // Clear only the eaten fish entries; junk stays behind.
+      for (const [key] of entries) state.inventory.delete(key);
       renderCatches();
       if (ateShiny) startAutoReel();
       state.eatingAll = false;
@@ -1310,10 +1749,11 @@
 
     let totalPearls = 0;
     for (const [key, count] of entries) {
-      const { fishId, isShiny } = parseInvKey(key);
-      const fish = FISH.find(f => f.id === fishId);
+      const parsed = parseInvKey(key);
+      if (parsed.isJunk) continue; // Junk contributes 0 pearls but still gets cleared below.
+      const fish = FISH.find(f => f.id === parsed.fishId);
       if (!fish) continue;
-      totalPearls += pearlsForCatch(fish, isShiny) * count;
+      totalPearls += pearlsForCatch(fish, parsed.isShiny, parsed.mutationId) * count;
     }
 
     const resolveAt = flyAllEntriesTo(entries, $sellAllBtn, {
@@ -1693,26 +2133,71 @@
   let shinySessionCount = 0;
   function showShinySequence(fish, { isFirstShiny } = {}) {
     shinySessionCount += 1;
-    const intensity = shinySessionCount === 1 ? 1 : 0.7;
+    const intensity = shinySessionCount === 1 ? 1 : 0.75;
 
+    // V12: gold glowing frame around the viewport — the "stronger visual
+    // overtone" Sebastian asked for. Pulses for the length of the celebration
+    // so the whole UI reads as special, not just a small overlay.
+    const frame = document.createElement("div");
+    frame.className = "shiny-frame";
+    frame.style.opacity = `${intensity}`;
+    document.body.appendChild(frame);
+    setTimeout(() => frame.remove(), 2500);
+
+    // Full-screen radial tint + diagonal sweep.
     const overlay = document.createElement("div");
     overlay.className = "shiny-overlay";
     overlay.style.opacity = `${intensity}`;
     const glints = document.createElement("div");
     glints.className = "glints";
-    for (let i = 0; i < 14; i++) {
-      const g = document.createElement("div");
-      g.className = "glint";
-      g.textContent = "✨";
-      g.style.setProperty("--x", `${20 + Math.random() * 60}%`);
-      g.style.setProperty("--y", `${15 + Math.random() * 70}%`);
-      g.style.setProperty("--sz", `${1.1 + Math.random() * 1.4}rem`);
-      g.style.setProperty("--d", `${Math.random() * 500}ms`);
-      glints.appendChild(g);
-    }
+    // Three staggered waves of sparkles so the overlay stays alive the whole
+    // 2.4-second run instead of popping once and fading.
+    const spawnGlints = (count, startDelay) => {
+      for (let i = 0; i < count; i++) {
+        const g = document.createElement("div");
+        g.className = "glint";
+        g.textContent = "✨";
+        g.style.setProperty("--x", `${8 + Math.random() * 84}%`);
+        g.style.setProperty("--y", `${10 + Math.random() * 80}%`);
+        g.style.setProperty("--sz", `${1.1 + Math.random() * 1.6}rem`);
+        g.style.setProperty("--d", `${startDelay + Math.random() * 400}ms`);
+        glints.appendChild(g);
+      }
+    };
+    spawnGlints(18, 0);
+    spawnGlints(14, 850);
+    spawnGlints(10, 1600);
     overlay.appendChild(glints);
     document.body.appendChild(overlay);
-    setTimeout(() => overlay.remove(), 960);
+    setTimeout(() => overlay.remove(), 2500);
+
+    // Gentle shake to punctuate the moment of catch — softer than legendary.
+    setTimeout(() => {
+      document.body.classList.remove("screen-shake");
+      void document.body.offsetWidth;
+      document.body.classList.add("screen-shake");
+      setTimeout(() => document.body.classList.remove("screen-shake"), 420);
+    }, 80);
+
+    // Two sparkle bursts for extra flair — one ring of stars, one of the fish.
+    setTimeout(() => burstCelebration({ emoji: "✨", hue: 0 }, { count: 30, distMin: 220, distMax: 520 }), 380);
+    setTimeout(() => burstCelebration(fish, { count: 16, distMin: 200, distMax: 420 }), 700);
+
+    // "SHINY!" banner drops in near the climax — matches legendary/mythic pattern.
+    setTimeout(() => showShinyBanner(fish, { isFirstShiny }), 900);
+  }
+
+  function showShinyBanner(fish, { isFirstShiny = false } = {}) {
+    const mount = () => {
+      const wrap = document.createElement("div");
+      wrap.className = "legendary-banner shiny-banner";
+      wrap.innerHTML = `
+        <div class="legendary-card shiny-card">✨ ${isFirstShiny ? "FIRST SHINY" : "SHINY"}! ${fishArt(fish, { cls: "banner", isShiny: true })}</div>
+      `;
+      document.body.appendChild(wrap);
+      setTimeout(() => wrap.remove(), 1700);
+    };
+    preloadFishImage(fish).finally(mount);
   }
 
   // ---------- V5 enhanced cast ripples (multi-ring + droplet spray) ----------
@@ -1973,13 +2458,16 @@
   function renderAlbum() {
     const discovered = Object.keys(prog.discovered).length;
     const shiniesFound = Object.keys(prog.shinyDiscovered).length;
+    // V12: count distinct (species, mutation) pairs the player has caught.
+    const mutationsFound = Object.keys(prog.mutationsDiscovered || {}).length;
     const starId = getTodaysStarFishId();
     const starFish = FISH.find(f => f.id === starId);
     const starCaught = !!prog.discovered[starId];
     const starHint = starFish
       ? `<span class="album-star-hint"${starCaught ? "" : ' title="Mystery fish — can you find them today?"'}>🌟 Today's Star: <strong>${starCaught ? starFish.name : "???"}</strong></span>`
       : "";
-    $albumProgress.innerHTML = `${discovered} / ${FISH.length} discovered${shiniesFound ? ` · ✨ ${shiniesFound} shiny` : ""}${starHint ? ` · ${starHint}` : ""}`;
+    const mutationSummary = mutationsFound ? ` · 🧬 ${mutationsFound} mutation${mutationsFound === 1 ? "" : "s"}` : "";
+    $albumProgress.innerHTML = `${discovered} / ${FISH.length} discovered${shiniesFound ? ` · ✨ ${shiniesFound} shiny` : ""}${mutationSummary}${starHint ? ` · ${starHint}` : ""}`;
     $albumGrid.innerHTML = "";
     for (const fish of FISH) {
       const got = !!prog.discovered[fish.id];
@@ -2010,6 +2498,9 @@
       const stampHTML = isStampable
         ? `<span class="passport-stamp" aria-hidden="true">${formatStampDate(firstCaughtAt)}</span>`
         : "";
+      // V12: mutation strip — one pip per mutation, lit if caught. Only shown
+      // once the base species is discovered so undiscovered cards stay mysterious.
+      const mutationStripHTML = got ? renderAlbumMutationStrip(fish.id) : "";
       card.innerHTML = `
         <span class="album-rarity-badge" aria-hidden="true"></span>
         ${gotShiny ? '<span class="shiny-badge" title="Shiny caught!">✨</span>' : ""}
@@ -2018,6 +2509,7 @@
         <span class="${emojiClass}">${fishDisplay}</span>
         <div class="album-name">${got ? fish.name : "???"}</div>
         <div class="album-sub">${got ? `${TIER_LABEL[fish.rarity]} · Caught ${count}×` : TIER_LABEL[fish.rarity]}</div>
+        ${mutationStripHTML}
         ${namingSlot}
       `;
       const nameBtn = card.querySelector(".album-name-tag");
@@ -2027,6 +2519,16 @@
       });
       $albumGrid.appendChild(card);
     }
+  }
+
+  function renderAlbumMutationStrip(fishId) {
+    const pips = EVENTS.map(ev => {
+      const mut = MUTATIONS[ev.mutationId];
+      const caught = !!prog.mutationsDiscovered[`${fishId}:${mut.id}`];
+      const title = caught ? `${mut.adj} caught!` : `${mut.adj} — catch during ${ev.name} event`;
+      return `<span class="album-mut-pip mut-${mut.id} ${caught ? "caught" : ""}" title="${title}" aria-label="${title}">${mut.icon}</span>`;
+    }).join("");
+    return `<div class="album-mut-strip" aria-label="Mutations">${pips}</div>`;
   }
 
   // ---------- Shop ----------
@@ -2130,6 +2632,7 @@
     renderShop();
     showRodPurchase(rod);
     saveProgression();
+    syncAchievementUnlocks();
   }
 
   function buyDecoration(id) {
@@ -2161,6 +2664,7 @@
       burstCelebration({ emoji: deco.emoji, hue: 0 });
     }
     saveProgression();
+    syncAchievementUnlocks();
   }
 
   // Modal instances defined at the bottom of the file via makeModal().
@@ -2203,6 +2707,23 @@
   function achievementStatus(a) {
     const { current, target } = a.progress(prog);
     return { current, target, unlocked: current >= target, ratio: Math.min(1, current / target) };
+  }
+
+  // Fires `achievement_unlocked` exactly once per achievement per profile.
+  // `silent` seeds already-unlocked state on first PostHog launch so pre-existing
+  // players don't flood events for past unlocks.
+  function syncAchievementUnlocks({ silent = false } = {}) {
+    if (!prog.achievementsUnlocked) prog.achievementsUnlocked = {};
+    let changed = false;
+    for (const a of ACHIEVEMENTS) {
+      if (prog.achievementsUnlocked[a.id]) continue;
+      if (achievementStatus(a).unlocked) {
+        prog.achievementsUnlocked[a.id] = Date.now();
+        changed = true;
+        if (!silent) track("achievement_unlocked", { achievement_id: a.id, achievement_name: a.name });
+      }
+    }
+    if (changed) saveProgression();
   }
 
   function renderAchievements() {
@@ -2254,7 +2775,7 @@
       btn.type = "button";
       btn.className = "name-option";
       btn.textContent = name;
-      btn.addEventListener("click", () => pickName(fishId, name));
+      btn.addEventListener("click", () => pickName(fishId, name, false));
       $namingGrid.appendChild(btn);
     }
     const surprise = document.createElement("button");
@@ -2264,15 +2785,24 @@
     surprise.addEventListener("click", () => {
       const pool = NAME_POOL.filter(n => n !== prog.names[fishId]);
       const pick = pool[Math.floor(Math.random() * pool.length)];
-      pickName(fishId, pick);
+      pickName(fishId, pick, true);
     });
     $namingGrid.appendChild(surprise);
     modals.naming.open();
   }
 
-  function pickName(fishId, name) {
+  function pickName(fishId, name, isRandomPick = false) {
     prog.names[fishId] = name;
     saveProgression();
+    const fish = FISH.find(f => f.id === fishId);
+    if (fish) {
+      track("legendary_named", {
+        species_id: fish.id,
+        species_name: fish.name,
+        chosen_name: name,
+        is_random_pick: !!isRandomPick,
+      });
+    }
     // Soft chime — single blip, no ceremony. Codex: "tap name, soft chime, done."
     if (!audioMuted()) blip({ key: "name", freq: 880, duration: 0.18, type: "sine", vol: 0.16 });
     modals.naming.close();
@@ -2305,6 +2835,273 @@
     pushNotif(n, 4000);
   }
 
+  // ---------- V12: Event lifecycle (impl) ----------
+
+  maybeStartEvent = function(force = null) {
+    if (state.activeEvent) return;
+    const shouldStart = force != null || window.__forceEvent != null || Math.random() < EVENT_CHANCE_PER_CAST;
+    if (!shouldStart) return;
+    const forcedId = force || window.__forceEvent;
+    if (window.__forceEvent) window.__forceEvent = null;
+    const event = forcedId ? eventById(forcedId) : EVENTS[Math.floor(Math.random() * EVENTS.length)];
+    if (!event) return;
+    startEvent(event);
+  };
+
+  function startEvent(event) {
+    state.activeEvent = { id: event.id, endsAt: Date.now() + EVENT_DURATION_MS };
+    document.body.classList.add("event-active", `event-${event.id}`);
+    showEventStartNotif(event);
+    playEventStartSound();
+    renderEventPill();
+    spawnEventFlair(event);
+    // Tick the countdown every second so the pill label updates.
+    if (state.eventTickerId) clearInterval(state.eventTickerId);
+    state.eventTickerId = setInterval(tickEvent, 1000);
+  }
+
+  tickEvent = function() {
+    if (!state.activeEvent) return;
+    if (Date.now() >= state.activeEvent.endsAt) { endEvent(); return; }
+    renderEventPill();
+  };
+
+  endEvent = function() {
+    const event = state.activeEvent ? eventById(state.activeEvent.id) : null;
+    state.activeEvent = null;
+    if (state.eventTickerId) { clearInterval(state.eventTickerId); state.eventTickerId = null; }
+    document.body.classList.remove("event-active", "event-storm", "event-rainbow", "event-moon");
+    renderEventPill();
+    clearEventFlair();
+    if (event) showEventEndNotif(event);
+  };
+
+  function renderEventPill() {
+    if (!$eventPill) return;
+    if (!state.activeEvent) {
+      $eventPill.classList.add("hidden");
+      $eventPill.innerHTML = "";
+      return;
+    }
+    const event = eventById(state.activeEvent.id);
+    if (!event) { $eventPill.classList.add("hidden"); return; }
+    const remaining = Math.max(0, Math.ceil((state.activeEvent.endsAt - Date.now()) / 1000));
+    const ratio = Math.max(0, Math.min(1, (state.activeEvent.endsAt - Date.now()) / EVENT_DURATION_MS));
+    $eventPill.classList.remove("hidden");
+    $eventPill.className = `event-pill event-${event.id}`;
+    $eventPill.innerHTML = `
+      <span class="event-pill-emoji">${event.emoji}</span>
+      <span class="event-pill-label">${event.name.toUpperCase()}</span>
+      <span class="event-pill-timer">${remaining}s</span>
+      <span class="event-pill-fill" style="--ratio:${ratio};"></span>
+    `;
+  }
+
+  function showEventStartNotif(event) {
+    const n = document.createElement("div");
+    n.className = `notif celebrate event-notif event-${event.id}`;
+    n.innerHTML = `
+      <div class="notif-emoji">${event.emoji}</div>
+      <div class="notif-text">
+        <span class="notif-hat">✨ ${event.name.toUpperCase()}</span>
+        <span class="notif-title">${event.name} rolled in!</span>
+        <span class="notif-sub">Catch ${MUTATIONS[event.mutationId].adj.toLowerCase()} mutations — worth ${MUTATION_MULT}× pearls.</span>
+      </div>
+    `;
+    pushNotif(n, NOTIF_HOLD.big);
+  }
+
+  function showEventEndNotif(event) {
+    const n = document.createElement("div");
+    n.className = "notif";
+    n.innerHTML = `
+      <div class="notif-emoji">${event.emoji}</div>
+      <div class="notif-text">
+        <span class="notif-title">${event.name} faded</span>
+      </div>
+    `;
+    pushNotif(n, NOTIF_HOLD.regular);
+  }
+
+  // V12: per-event flair in the sky zone. Each event gets its own setup +
+  // teardown so the sky actually *looks like* the weather, not just tinted.
+  // `state.eventFlair` collects timers + DOM elements to clean up on end.
+  const eventFlair = { timers: [], elements: [] };
+
+  function spawnEventFlair(event) {
+    clearEventFlair();
+    if (event.id === "storm") startStormFlair();
+    else if (event.id === "rainbow") startRainbowFlair();
+    else if (event.id === "moon") startMoonFlair();
+  }
+
+  function clearEventFlair() {
+    for (const t of eventFlair.timers) {
+      clearTimeout(t); clearInterval(t);
+    }
+    eventFlair.timers = [];
+    for (const el of eventFlair.elements) el.remove();
+    eventFlair.elements = [];
+  }
+
+  // Storm: random lightning flashes every 2-6s. Each flash is a full-sky
+  // white-out lasting ~160ms, plus a soft rumble via a short noise burst.
+  function startStormFlair() {
+    const skyZone = document.querySelector(".sky-zone");
+    if (!skyZone) return;
+    const scheduleNext = () => {
+      const delay = 1800 + Math.random() * 4200;
+      const t = setTimeout(() => {
+        if (!state.activeEvent || state.activeEvent.id !== "storm") return;
+        flashLightning(skyZone);
+        scheduleNext();
+      }, delay);
+      eventFlair.timers.push(t);
+    };
+    scheduleNext();
+  }
+
+  function flashLightning(skyZone) {
+    // Double-flash for realism — quick white, brief dark, second pop.
+    const flash = document.createElement("div");
+    flash.className = "lightning-flash";
+    skyZone.appendChild(flash);
+    eventFlair.elements.push(flash);
+    setTimeout(() => { flash.remove(); }, 700);
+    // Low rumble — mellow noise burst, not loud.
+    if (!audioMuted()) {
+      noiseBurst({ duration: 0.55, vol: 0.08, filterFreq: 260, filterSlide: 90, at: 0.06 });
+      blip({ freq: 72, slideTo: 42, duration: 0.45, type: "sine", vol: 0.07, at: 0.08 });
+    }
+  }
+
+  // Rainbow: mount a single SVG arc across the sky zone. Gentle shimmer.
+  function startRainbowFlair() {
+    const skyZone = document.querySelector(".sky-zone");
+    if (!skyZone) return;
+    const arc = document.createElement("div");
+    arc.className = "rainbow-arc";
+    arc.innerHTML = `
+      <svg viewBox="0 0 400 200" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <filter id="rainbow-shimmer" x="-5%" y="-5%" width="110%" height="110%">
+            <feGaussianBlur stdDeviation="1.2" />
+          </filter>
+        </defs>
+        <path d="M 20 200 Q 200 -30 380 200" fill="none" stroke="#ff5a5a" stroke-width="10" filter="url(#rainbow-shimmer)" />
+        <path d="M 20 200 Q 200 -18 380 200" fill="none" stroke="#ff9a3a" stroke-width="10" filter="url(#rainbow-shimmer)" />
+        <path d="M 20 200 Q 200 -6 380 200"  fill="none" stroke="#ffd84a" stroke-width="10" filter="url(#rainbow-shimmer)" />
+        <path d="M 20 200 Q 200 6 380 200"   fill="none" stroke="#5adc6a" stroke-width="10" filter="url(#rainbow-shimmer)" />
+        <path d="M 20 200 Q 200 18 380 200"  fill="none" stroke="#4ab6ff" stroke-width="10" filter="url(#rainbow-shimmer)" />
+        <path d="M 20 200 Q 200 30 380 200"  fill="none" stroke="#a26dff" stroke-width="10" filter="url(#rainbow-shimmer)" />
+      </svg>
+    `;
+    skyZone.appendChild(arc);
+    eventFlair.elements.push(arc);
+  }
+
+  // Moon: slow drifting moon across the sky zone, with soft glow.
+  function startMoonFlair() {
+    const skyZone = document.querySelector(".sky-zone");
+    if (!skyZone) return;
+    const moon = document.createElement("div");
+    moon.className = "drifting-moon";
+    moon.textContent = "🌕";
+    skyZone.appendChild(moon);
+    eventFlair.elements.push(moon);
+    // Kick the CSS-driven drift.
+    requestAnimationFrame(() => moon.classList.add("drifting"));
+  }
+
+  // Ascending two-note chime when an event begins — different from shiny so
+  // the ear recognizes "something new in the world" vs "jackpot catch."
+  function playEventStartSound() {
+    if (audioMuted()) return;
+    const k = "event";
+    stopSoundKey(k);
+    blip({ key: k, freq: 523, slideTo: 784, duration: 0.36, type: "triangle", vol: 0.14, attack: 0.01, release: 0.18 });
+    blip({ key: k, freq: 784, slideTo: 1046, duration: 0.32, type: "sine",    vol: 0.10, attack: 0.02, release: 0.18, at: 0.18 });
+    blip({ key: k, freq: 261, duration: 0.6, type: "triangle", vol: 0.05, at: 0.0 });
+  }
+
+  // ---------- V12: Profiles ----------
+
+  let openProfilePicker, closeProfilePicker, openCreateProfile, closeCreateProfile;
+
+  function renderProfileGrid() {
+    const tiles = profiles.slots.map(slot => {
+      const stats = peekSlotStats(slot.id);
+      const isActive = slot.id === profiles.active;
+      return `
+        <button class="profile-card ${isActive ? "active" : ""}" data-slot-id="${slot.id}" type="button">
+          <span class="profile-emoji">${slot.emoji}</span>
+          <span class="profile-name">${escapeHtml(slot.name)}</span>
+          <span class="profile-stats">
+            <span>🫧 ${stats.pearls}</span>
+            <span>📖 ${stats.discovered}</span>
+          </span>
+        </button>
+      `;
+    });
+    if (profiles.slots.length < MAX_SLOTS) {
+      tiles.push(`
+        <button class="profile-card new-slot" id="profile-new-btn" type="button">
+          <span class="profile-emoji">➕</span>
+          <span class="profile-name">New Player</span>
+        </button>
+      `);
+    }
+    $profileGrid.innerHTML = tiles.join("");
+    $profileGrid.querySelectorAll(".profile-card[data-slot-id]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-slot-id");
+        if (id === profiles.active) {
+          // Tapping your own tile from the Switch-Player flow just closes the picker.
+          closeProfilePicker();
+          return;
+        }
+        switchToProfile(id);
+      });
+    });
+    const newBtn = document.getElementById("profile-new-btn");
+    if (newBtn) newBtn.addEventListener("click", () => openCreateProfile());
+  }
+
+  function renderCreateProfile() {
+    state.createProfileEmoji = PROFILE_EMOJIS[0];
+    $createProfileName.value = "";
+    $createProfileEmojis.innerHTML = PROFILE_EMOJIS.map((e, i) => `
+      <button type="button" class="create-profile-emoji-btn ${i === 0 ? "selected" : ""}" data-emoji="${e}">${e}</button>
+    `).join("");
+    $createProfileEmojis.querySelectorAll(".create-profile-emoji-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        state.createProfileEmoji = btn.getAttribute("data-emoji");
+        $createProfileEmojis.querySelectorAll(".create-profile-emoji-btn").forEach(b => b.classList.toggle("selected", b === btn));
+        updateCreateSubmitEnabled();
+      });
+    });
+    updateCreateSubmitEnabled();
+    setTimeout(() => $createProfileName.focus(), 40);
+  }
+
+  function updateCreateSubmitEnabled() {
+    const hasName = $createProfileName.value.trim().length > 0;
+    $createProfileSubmit.disabled = !hasName;
+  }
+
+  function submitCreateProfile() {
+    const name = $createProfileName.value.trim();
+    if (!name) return;
+    createProfile({ name, emoji: state.createProfileEmoji });
+    try { sessionStorage.setItem(SKIP_PICKER_FLAG, "1"); } catch (e) {}
+    location.reload();
+  }
+
+  // Lightweight escape for profile names rendered into innerHTML.
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+  }
+
   // ---------- Init ----------
 
   function init() {
@@ -2322,6 +3119,41 @@
     spawnSkyCloud();
     requestAnimationFrame(tick);
 
+    // Seed achievement-unlock state silently so pre-existing players don't
+    // flood events for unlocks that happened before analytics was wired in.
+    syncAchievementUnlocks({ silent: true });
+
+    // Attach a stable per-kid dimension to every event so Sebastian can filter
+    // "only Emma's events" in PostHog. Slot id, not display name — no PII.
+    try { window.posthog && window.posthog.register && window.posthog.register({ profile_id: profiles.active }); } catch (e) {}
+
+    // Explicit page_loaded so the event name in Live Events matches the task
+    // vocabulary (autocaptured $pageview is still sent alongside).
+    track("page_loaded", {
+      user_agent: navigator.userAgent,
+      viewport_width: window.innerWidth,
+      viewport_height: window.innerHeight,
+    });
+
+    // Session end. iOS Safari often fires `visibilitychange` (hidden) when a
+    // tab is backgrounded without ever firing `pagehide`. Listen for both and
+    // gate on `sessionEnded` so we emit exactly once per load. PostHog uses
+    // fetch-keepalive, so the event delivers on unload.
+    function endSession() {
+      if (sessionEnded) return;
+      sessionEnded = true;
+      track("session_duration", {
+        duration_seconds: Math.round((Date.now() - sessionStartMs) / 1000),
+        total_casts: sessionCasts,
+        total_catches: sessionCatches,
+        unique_species_caught: sessionSpecies.size,
+      });
+    }
+    window.addEventListener("pagehide", endSession);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") endSession();
+    });
+
     $castBtn.addEventListener("click", cast);
     $pond.addEventListener("click", (e) => {
       // Don't count clicks on decorations as cast triggers.
@@ -2336,8 +3168,13 @@
     modals.shop         = makeModal({ overlay: $shopOverlay,         stateKey: "shopOpen",         onOpen: renderShop });
     modals.tackleBag    = makeModal({ overlay: $tackleBagOverlay,    stateKey: "tackleBagOpen",    onOpen: renderRods });
     modals.achievements = makeModal({ overlay: $achievementsOverlay, stateKey: "achievementsOpen", onOpen: renderAchievements });
-    modals.settings     = makeModal({ overlay: $settingsOverlay,     stateKey: "settingsOpen",     onOpen: () => { renderMuteToggle(); hideResetConfirm(); }, onClose: hideResetConfirm });
+    modals.settings     = makeModal({ overlay: $settingsOverlay,     stateKey: "settingsOpen",     onOpen: () => { renderMuteToggle(); hideResetConfirm(); renderActiveProfileLabel(); }, onClose: hideResetConfirm });
     modals.naming       = makeModal({ overlay: $namingOverlay,       stateKey: "namingOpen",       onClose: () => { state.namingSpecies = null; } });
+    modals.profile      = makeModal({ overlay: $profileOverlay,      stateKey: "profileOpen",      onOpen: renderProfileGrid });
+    modals.createProfile = makeModal({ overlay: $createProfileOverlay, stateKey: "createProfileOpen", onOpen: renderCreateProfile });
+
+    openProfilePicker  = modals.profile.open;       closeProfilePicker  = modals.profile.close;
+    openCreateProfile  = modals.createProfile.open; closeCreateProfile  = modals.createProfile.close;
 
     // Back-compat function names used elsewhere in the file.
     openAlbum = modals.album.open; closeAlbum = modals.album.close;
@@ -2399,8 +3236,38 @@
     $resetCancel.addEventListener("click", hideResetConfirm);
     $resetYes.addEventListener("click", performReset);
 
+    // V12: profile switcher + create-profile form.
+    $switchProfileBtn.addEventListener("click", () => {
+      closeSettings();
+      // Show a close button this time — switcher is dismissable (boot flow isn't).
+      $profileClose.classList.remove("hidden");
+      openProfilePicker();
+    });
+    $createProfileName.addEventListener("input", updateCreateSubmitEnabled);
+    $createProfileName.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !$createProfileSubmit.disabled) submitCreateProfile();
+    });
+    $createProfileSubmit.addEventListener("click", submitCreateProfile);
+
+    // Auto-open the picker on boot when 2+ profiles exist and we didn't just
+    // come back from a picker selection (sessionStorage flag avoids reload loops).
+    const skip = sessionStorage.getItem(SKIP_PICKER_FLAG) === "1";
+    if (skip) sessionStorage.removeItem(SKIP_PICKER_FLAG);
+    if (!skip && profiles.slots.length >= 2) {
+      // Initial picker is non-dismissable — must choose someone.
+      $profileClose.classList.add("hidden");
+      openProfilePicker();
+    }
+
     // Daily gift check — briefly after load so the notif has somewhere to land.
     setTimeout(checkDailyGift, 600);
+  }
+
+  function renderActiveProfileLabel() {
+    const p = activeProfile();
+    const label = p ? `${p.emoji} ${p.name}` : "Player";
+    if ($activeProfileName) $activeProfileName.textContent = label;
+    if ($resetConfirmName) $resetConfirmName.textContent = p ? `${p.name}'s` : "this player's";
   }
 
   // ---------- V5 Settings / Reset ----------
@@ -2447,8 +3314,10 @@
     if (resetCountdownTimer) { clearInterval(resetCountdownTimer); resetCountdownTimer = null; }
   }
   function performReset() {
-    try { localStorage.removeItem(STORAGE_KEY); for (const k of LEGACY_KEYS) localStorage.removeItem(k); } catch (e) {}
-    // Hard reload to reset in-memory state cleanly.
+    // V12: reset is scoped to the active profile only. Other players' saves
+    // (and the profile roster itself) survive untouched.
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    try { sessionStorage.setItem(SKIP_PICKER_FLAG, "1"); } catch (e) {}
     location.reload();
   }
 

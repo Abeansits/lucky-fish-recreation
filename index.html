@@ -6,6 +6,34 @@
   <title>Lucky Fish</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='50' font-size='52'%3E🐟%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
+  <!-- PostHog analytics (project token is client-safe per PostHog docs). -->
+  <script>
+    !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+    posthog.init('phc_xYtA8aQQCKNamusC3ZSmRug6hQB2TBtbJXgaADSWsPSd', {
+      api_host: 'https://us.i.posthog.com',
+      person_profiles: 'identified_only',
+      // $pageview stays; $pageleave is off because game.js emits a richer
+      // `session_duration` on pagehide/visibilitychange and $pageleave would
+      // just duplicate it in the Live Events view.
+      capture_pageview: true,
+      capture_pageleave: false,
+      // Kid-safe + clean Live Events: only our explicit events land.
+      autocapture: false,
+      disable_session_recording: true,
+      enable_heatmaps: false,
+      // iOS private tabs block cookies; localStorage survives.
+      persistence: 'localStorage',
+      // Defensive PII scrub in case a future payload accidentally adds a kid's
+      // display name. We only emit slot IDs today, but the floor is cheap.
+      before_send: function (event) {
+        if (event && event.properties) delete event.properties.profile_name;
+        return event;
+      },
+      loaded: function (ph) {
+        if (typeof ph.stopSessionRecording === 'function') ph.stopSessionRecording();
+      },
+    });
+  </script>
 </head>
 <body>
   <header class="app-header">
@@ -26,6 +54,8 @@
       </button>
     </div>
     <div id="buff-row" class="buff-row" aria-label="Active buffs"></div>
+    <!-- V12: pond event pill — visible only while an event is active. -->
+    <div id="event-pill" class="event-pill hidden" aria-live="polite"></div>
   </header>
 
   <main class="board">
@@ -137,6 +167,43 @@
     </div>
   </div>
 
+  <!-- V12: Profile picker ("Who's playing?") -->
+  <div id="profile-overlay" class="album-overlay hidden" aria-hidden="true">
+    <div class="album-modal profile-modal" role="dialog" aria-label="Choose player">
+      <div class="album-header">
+        <h2>👋 Who's playing?</h2>
+        <div class="album-progress">Tap to play</div>
+        <button id="profile-close" class="album-close hidden" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="profile-grid" class="profile-grid"></div>
+    </div>
+  </div>
+
+  <!-- V12: Create-profile modal -->
+  <div id="create-profile-overlay" class="album-overlay hidden" aria-hidden="true">
+    <div class="album-modal create-profile-modal" role="dialog" aria-label="New player">
+      <div class="album-header">
+        <h2>✨ New Player</h2>
+        <button id="create-profile-close" class="album-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="create-profile-body">
+        <label class="create-profile-label" for="create-profile-name">Your name</label>
+        <input
+          id="create-profile-name"
+          class="create-profile-input"
+          type="text"
+          maxlength="14"
+          placeholder="Your name"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div class="create-profile-label">Pick an emoji</div>
+        <div id="create-profile-emojis" class="create-profile-emojis"></div>
+        <button id="create-profile-submit" class="create-profile-submit" type="button" disabled>Let's fish!</button>
+      </div>
+    </div>
+  </div>
+
   <!-- V9: Name-your-legendary modal -->
   <div id="naming-overlay" class="album-overlay hidden" aria-hidden="true">
     <div class="album-modal naming-modal" role="dialog" aria-label="Name your catch">
@@ -197,16 +264,24 @@
           </button>
         </div>
 
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>👥 Player</span>
+            <span class="setting-hint">Playing as <strong id="active-profile-name">Player 1</strong></span>
+          </div>
+          <button id="switch-profile-btn" class="switch-profile-btn" type="button">Switch…</button>
+        </div>
+
         <div class="setting-row danger">
           <div class="setting-label">
-            <span>⚠️ Reset Everything</span>
-            <span class="setting-hint">Erase catches, pearls, rods, decorations. Cannot be undone.</span>
+            <span>⚠️ Reset This Player</span>
+            <span class="setting-hint">Erase this player's catches, pearls, rods, decorations. Cannot be undone.</span>
           </div>
           <button id="reset-btn" class="reset-btn" type="button">Reset…</button>
         </div>
 
         <div id="reset-confirm" class="reset-confirm hidden">
-          <p class="reset-warn">This erases your whole album, pearls, unlocked rods, decorations, and shinies. Are you sure?</p>
+          <p class="reset-warn">This erases <strong id="reset-confirm-name">this player's</strong> album, pearls, unlocked rods, decorations, and shinies. Other players are safe. Are you sure?</p>
           <div class="reset-confirm-buttons">
             <button id="reset-cancel" class="reset-cancel" type="button">Cancel</button>
             <button id="reset-yes" class="reset-yes" type="button" disabled>Yes, erase (3)</button>

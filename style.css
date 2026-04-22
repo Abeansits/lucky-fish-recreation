@@ -70,7 +70,8 @@ h2 {
 }
 /* V5 stylized game-logo title — 3D outlined text with warm gradient fill */
 .title {
-  font-size: clamp(2.2rem, 4.2vw, 3.4rem);
+  /* V12: bumped all three stops +20% per Sebastian's request. */
+  font-size: clamp(2.64rem, 5.04vw, 4.08rem);
   text-align: center;
   display: flex;
   align-items: center;
@@ -656,6 +657,7 @@ h2 {
 .cast-reel.rarity-rare      { border-color: #a344ea; box-shadow: 0 8px 0 rgba(163, 68, 234, 0.5), 0 0 0 6px rgba(163, 68, 234, 0.2), inset 0 4px 10px rgba(0, 0, 0, 0.15), 0 0 24px rgba(163, 68, 234, 0.6); }
 .cast-reel.rarity-legendary { border-color: #ffb81a; box-shadow: 0 8px 0 rgba(255, 184, 26, 0.55), 0 0 0 6px rgba(255, 184, 26, 0.2), inset 0 4px 10px rgba(0, 0, 0, 0.15), 0 0 32px rgba(255, 184, 26, 0.75); }
 .cast-reel.rarity-mythic    { border-color: #ff3fcf; box-shadow: 0 8px 0 rgba(255, 63, 207, 0.6),  0 0 0 6px rgba(255, 63, 207, 0.22), inset 0 4px 10px rgba(0, 0, 0, 0.15), 0 0 36px rgba(255, 63, 207, 0.85); }
+.cast-reel.rarity-junk      { border-color: #94a3ad; box-shadow: 0 8px 0 rgba(148, 163, 173, 0.4), 0 0 0 6px rgba(148, 163, 173, 0.15), inset 0 4px 10px rgba(0, 0, 0, 0.1); filter: saturate(0.4); }
 
 @keyframes reelPop {
   from { transform: scale(0.4); opacity: 0; }
@@ -761,15 +763,17 @@ body.screen-shake { animation: screenShake 420ms cubic-bezier(.36,.07,.19,.97) b
   100% { transform: scale(1.08) translateY(-16px); opacity: 0; }
 }
 
-/* Full-screen shiny shimmer — diagonal gold sweep */
+/* Full-screen shiny shimmer — diagonal gold sweep.
+   V12: extended from 900ms → 2400ms so the moment lingers, with two sweep
+   passes and three glint waves feeding into it from showShinySequence. */
 .shiny-overlay {
   position: fixed;
   inset: 0;
   z-index: 61;
   pointer-events: none;
   overflow: hidden;
-  background: radial-gradient(ellipse at 50% 45%, rgba(255, 240, 170, 0.25), transparent 70%);
-  animation: shinyOverlayFade 900ms ease-out forwards;
+  background: radial-gradient(ellipse at 50% 45%, rgba(255, 240, 170, 0.28), transparent 70%);
+  animation: shinyOverlayFade 2400ms ease-out forwards;
 }
 .shiny-overlay::before {
   content: "";
@@ -784,12 +788,14 @@ body.screen-shake { animation: screenShake 420ms cubic-bezier(.36,.07,.19,.97) b
     transparent 66%,
     transparent 100%);
   transform: translateX(-60%);
-  animation: shinySweep 900ms cubic-bezier(.25, .8, .35, 1) forwards;
+  /* Two sweeps across the viewport during the overlay's lifetime. */
+  animation: shinySweep 1400ms cubic-bezier(.25, .8, .35, 1) forwards,
+             shinySweep 1400ms cubic-bezier(.25, .8, .35, 1) 1100ms forwards;
   mix-blend-mode: screen;
 }
 @keyframes shinyOverlayFade {
   0% { opacity: 0; }
-  15%, 75% { opacity: 1; }
+  6%, 86% { opacity: 1; }
   100% { opacity: 0; }
 }
 @keyframes shinySweep {
@@ -807,14 +813,71 @@ body.screen-shake { animation: screenShake 420ms cubic-bezier(.36,.07,.19,.97) b
   font-size: var(--sz, 1.6rem);
   left: var(--x, 50%);
   top: var(--y, 50%);
-  animation: glintPop 900ms ease-out forwards;
+  animation: glintPop 1300ms ease-out forwards;
   animation-delay: var(--d, 0ms);
   filter: drop-shadow(0 0 6px #fff5b8);
 }
 @keyframes glintPop {
-  0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
-  40% { transform: translate(-50%, -50%) scale(1.2) rotate(15deg); opacity: 1; }
-  100% { transform: translate(-50%, -50%) scale(0.4) rotate(-15deg); opacity: 0; }
+  0%   { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+  25%  { transform: translate(-50%, -50%) scale(1.3) rotate(15deg); opacity: 1; }
+  65%  { transform: translate(-50%, -50%) scale(1) rotate(-8deg); opacity: 0.95; }
+  100% { transform: translate(-50%, -50%) scale(0.35) rotate(-20deg); opacity: 0; }
+}
+
+/* V12: golden glowing frame around the whole viewport — the "UI shine" overtone.
+   Pulses in, holds, and fades over the length of the celebration. */
+.shiny-frame {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  box-shadow:
+    inset 0 0 32px 8px rgba(255, 220, 100, 0.85),
+    inset 0 0 110px 32px rgba(255, 180, 40, 0.45),
+    inset 0 0 220px 60px rgba(255, 150, 20, 0.2);
+  animation: shinyFramePulse 2500ms ease-out forwards;
+}
+@keyframes shinyFramePulse {
+  0%   { opacity: 0; filter: brightness(1.1); }
+  10%  { opacity: 1; filter: brightness(1.35); }
+  30%  { opacity: 1; filter: brightness(1.15); }
+  70%  { opacity: 1; filter: brightness(1.1); }
+  100% { opacity: 0; filter: brightness(1); }
+}
+
+/* V12: SHINY! banner — matches the legendary/mythic pattern but gold-crystal
+   themed. Uses .legendary-card as the base and overrides the palette. */
+.legendary-card.shiny-card {
+  background: linear-gradient(135deg, #ffe38c 0%, #fff5c6 38%, #ffd566 62%, #ffa820 100%);
+  color: #5c3a08;
+  font-size: 2.2rem;
+  padding: 20px 32px;
+  border: 4px solid rgba(255, 230, 140, 0.9);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.75), 0 2px 6px rgba(140, 90, 10, 0.45);
+  box-shadow:
+    0 0 0 6px rgba(255, 255, 255, 0.6),
+    0 0 0 12px rgba(255, 200, 80, 0.65),
+    0 20px 58px rgba(220, 150, 20, 0.55),
+    0 0 110px 20px rgba(255, 220, 100, 0.55),
+    inset 0 2px 0 rgba(255, 255, 255, 0.7);
+  animation: shinyCardPop 1700ms cubic-bezier(.3, 1.6, .5, 1) forwards;
+}
+@keyframes shinyCardPop {
+  0%   { transform: scale(0.3) rotate(-5deg); opacity: 0; }
+  35%  { transform: scale(1.15) rotate(3deg); opacity: 1; }
+  50%  { transform: scale(0.96) rotate(-1deg); }
+  65%  { transform: scale(1.04) rotate(0.8deg); }
+  80%  { transform: scale(1); }
+  100% { transform: scale(1.06) translateY(-14px); opacity: 0; }
+}
+
+/* V12: cast button locked while shiny celebration runs. Dimmed + non-clickable
+   so the kid can't tap past the fanfare. */
+.cast-btn.shiny-lock {
+  filter: saturate(0.55) brightness(0.85);
+  opacity: 0.75;
+  pointer-events: none;
+  cursor: not-allowed;
 }
 
 body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
@@ -928,6 +991,7 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
 .catches-panel { min-height: 0; }
 .catches {
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -935,7 +999,10 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   scrollbar-gutter: stable;
   flex: 1;
   min-height: 140px;
-  max-height: 60vh;
+  /* Cap so the panel doesn't eat the entire screen on ultra-tall monitors,
+     but generous enough to show ~10 rows on mobile portrait without cutting
+     off early. Pure 75vh on phones, absolute 900px on very tall windows. */
+  max-height: min(75vh, 900px);
 }
 .catches::-webkit-scrollbar { width: 8px; }
 .catches::-webkit-scrollbar-thumb { background: #cfe2ec; border-radius: 4px; }
@@ -956,6 +1023,12 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   animation: entryIn 280ms cubic-bezier(.3,1.5,.5,1);
   overflow: hidden;
 }
+.catch-entry {
+  /* Flex column children shrink by default — that squashed rows to ~20px
+     when the inventory exceeded the scroll cap. Pin their size so the
+     container scrolls instead of compressing each row. */
+  flex-shrink: 0;
+}
 .catch-entry .catch-card {
   position: relative;
   z-index: 2;
@@ -964,6 +1037,8 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   align-items: center;
   gap: 10px;
   padding: 8px 14px 8px 0;
+  /* Room for two stacked action buttons (Sell + Eat) without clipping. */
+  min-height: 76px;
   background: #f8fbfd;
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-soft);
@@ -1024,6 +1099,33 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   background: linear-gradient(180deg, #ff3fcf 0%, #9d28ff 100%);
   box-shadow: 0 0 6px rgba(255, 63, 207, 0.45) inset;
 }
+.catch-bar.rarity-junk {
+  background: linear-gradient(180deg, #b4bec6 0%, #7c8a94 100%);
+}
+/* V12: junk rows read as "dingy" — desaturated, dimmer, sorted to the bottom.
+   No swipe actions, just a tiny Toss button. */
+.catch-entry.is-junk .catch-card {
+  background: #eef2f5;
+  filter: saturate(0.55);
+  opacity: 0.82;
+}
+.catch-entry.is-junk .junk-emoji {
+  font-size: 1.8rem;
+  text-align: center;
+}
+.catch-entry.is-junk .catch-name { color: var(--ink-soft); }
+.catch-entry.is-junk .catch-count { color: #9aa5ae; font-style: italic; }
+.catch-btn.toss-btn {
+  background: linear-gradient(180deg, #d0d8de 0%, #9aa5ae 100%);
+  color: #2d3d4a;
+  box-shadow: 0 3px 0 #6b7880, 0 6px 12px rgba(107, 120, 128, 0.22);
+}
+.catch-btn.toss-btn:active {
+  transform: scale(1.05, 0.9) translateY(1px);
+  box-shadow: 0 1px 0 #6b7880, 0 2px 6px rgba(107, 120, 128, 0.2);
+}
+/* Notification flavor for junk catches — neutral, no celebration vibe. */
+.notif.rarity-junk { border-left-color: #94a3ad; }
 .catch-emoji { font-size: 1.8rem; text-align: center; }
 .catch-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .catch-name { font-weight: 800; font-size: 0.95rem; }
@@ -2072,3 +2174,448 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
    the stamp to the left so they don't collide. */
 .album-card .shiny-badge ~ .passport-stamp { right: 36px; }
 .album-card .star-ribbon ~ .passport-stamp { right: 36px; }
+
+/* --- V12: profile picker --- */
+.profile-modal { max-width: 560px; }
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px;
+  padding: 18px 20px 22px;
+  overflow-y: auto;
+}
+.profile-card {
+  appearance: none;
+  border: 2px solid rgba(42, 133, 192, 0.2);
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 18px 12px 14px;
+  text-align: center;
+  box-shadow: var(--shadow-soft);
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--ink);
+  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.profile-card:hover { transform: translateY(-3px); border-color: var(--ocean); }
+.profile-card:active { transform: translateY(1px); }
+.profile-card.active {
+  border-color: var(--legendary);
+  background: linear-gradient(180deg, #fffef0 0%, var(--legendary-soft) 100%);
+  box-shadow: var(--shadow-soft), 0 0 0 3px rgba(255, 184, 26, 0.25);
+}
+.profile-emoji {
+  font-size: 3rem;
+  line-height: 1;
+  filter: drop-shadow(0 2px 4px rgba(5, 61, 91, 0.18));
+}
+.profile-name {
+  font-weight: 800;
+  font-size: 1rem;
+  margin-top: 4px;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-stats {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  font-weight: 700;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.profile-stats span { white-space: nowrap; }
+
+.profile-card.new-slot {
+  border-style: dashed;
+  border-color: rgba(42, 133, 192, 0.4);
+  background: linear-gradient(180deg, #f4faff 0%, #dff0fb 100%);
+  color: var(--ocean-deep);
+  justify-content: center;
+  min-height: 140px;
+}
+.profile-card.new-slot .profile-emoji { font-size: 2.2rem; opacity: 0.85; }
+.profile-card.new-slot .profile-name { color: var(--ocean-deep); }
+
+/* --- V12: create-profile form --- */
+.create-profile-modal { max-width: 480px; }
+.create-profile-body {
+  padding: 18px 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.create-profile-label {
+  font-weight: 800;
+  color: var(--ink);
+  font-size: 0.95rem;
+}
+.create-profile-input {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 2px solid rgba(42, 133, 192, 0.3);
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: inherit;
+  color: var(--ink);
+  background: #f4faff;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.create-profile-input:focus {
+  outline: none;
+  border-color: var(--ocean);
+  background: #ffffff;
+}
+.create-profile-emojis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  background: #f4faff;
+  border-radius: 14px;
+  border: 1.5px solid rgba(42, 133, 192, 0.15);
+}
+.create-profile-emoji-btn {
+  appearance: none;
+  border: 2px solid transparent;
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 8px 0;
+  font-size: 1.7rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.create-profile-emoji-btn:hover { transform: scale(1.08); }
+.create-profile-emoji-btn.selected {
+  border-color: var(--legendary);
+  background: var(--legendary-soft);
+}
+.create-profile-submit {
+  margin-top: 6px;
+  appearance: none;
+  border: none;
+  padding: 13px;
+  border-radius: 14px;
+  font-size: 1rem;
+  font-weight: 800;
+  font-family: inherit;
+  color: white;
+  background: linear-gradient(180deg, #4caf50 0%, #2d8c32 100%);
+  box-shadow: 0 4px 0 #226823, 0 6px 12px rgba(34, 104, 35, 0.3);
+  cursor: pointer;
+  transition: transform 100ms ease, box-shadow 100ms ease, filter 100ms ease;
+}
+.create-profile-submit:hover:not(:disabled) { filter: brightness(1.05); }
+.create-profile-submit:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 #226823, 0 3px 8px rgba(34, 104, 35, 0.25);
+}
+.create-profile-submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: linear-gradient(180deg, #9bc69c 0%, #7aa17d 100%);
+  box-shadow: 0 2px 0 #5e7a60;
+}
+
+/* --- V12: Switch-player button in settings --- */
+.switch-profile-btn {
+  appearance: none;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #3db4f0 0%, #1b6ea8 100%);
+  color: white;
+  font-weight: 800;
+  font-size: 0.9rem;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 3px 0 #0b3c5f, 0 4px 10px rgba(5, 61, 91, 0.25);
+  transition: transform 100ms ease, box-shadow 100ms ease, filter 100ms ease;
+}
+.switch-profile-btn:hover { filter: brightness(1.05); }
+.switch-profile-btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 #0b3c5f, 0 2px 6px rgba(5, 61, 91, 0.2);
+}
+
+.album-close.hidden { display: none; }
+
+/* --- V12: Pond event pill + sky tints + mutation styling --- */
+.event-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px 7px 10px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fffbe8 0%, #ffe999 100%);
+  border: 2.5px solid #e9b93a;
+  color: #4c3104;
+  font-weight: 800;
+  font-size: 0.88rem;
+  letter-spacing: 0.05em;
+  box-shadow: 0 4px 14px rgba(233, 185, 58, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  position: relative;
+  overflow: hidden;
+  animation: eventPillAppear 360ms cubic-bezier(.3, 1.5, .5, 1);
+  align-self: center;
+}
+.event-pill.hidden { display: none; }
+.event-pill-emoji { font-size: 1.2rem; line-height: 1; }
+.event-pill-label { font-weight: 900; }
+.event-pill-timer { font-variant-numeric: tabular-nums; opacity: 0.75; }
+.event-pill-fill {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(255, 215, 90, 0.55), rgba(255, 184, 26, 0.25));
+  transform: scaleX(var(--ratio, 1));
+  transform-origin: left center;
+  opacity: 0.35;
+  z-index: 0;
+  transition: transform 1s linear;
+}
+.event-pill > * { position: relative; z-index: 1; }
+
+@keyframes eventPillAppear {
+  0%   { transform: translateY(-8px) scale(0.8); opacity: 0; }
+  70%  { transform: translateY(0) scale(1.05); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+/* Per-event pill accents */
+.event-pill.event-storm {
+  background: linear-gradient(180deg, #d9edff 0%, #88baff 100%);
+  border-color: #3a8dde;
+  color: #0b3d62;
+  box-shadow: 0 4px 14px rgba(58, 141, 222, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+.event-pill.event-rainbow {
+  background: linear-gradient(90deg, #ffb3b3, #ffd98c, #b7f0a1, #a7d9ff, #d7b3ff);
+  border-color: #a05ad8;
+  color: #3a1a55;
+}
+.event-pill.event-moon {
+  background: linear-gradient(180deg, #f1f0ff 0%, #c2bfff 100%);
+  border-color: #7470d6;
+  color: #1f1a55;
+}
+
+/* Sky-zone tints while an event is active. Reuses the .sky-zone gradient
+   backdrop but lays a themed wash on top so the pond sky visibly shifts
+   without touching the pond water below. */
+body.event-active .sky-zone { position: relative; }
+body.event-active .sky-zone::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: eventSkyFade 600ms ease-out;
+  mix-blend-mode: multiply;
+}
+body.event-storm .sky-zone::after {
+  background: linear-gradient(180deg, #465d7a 0%, #7a8faa 80%);
+  opacity: 0.45;
+}
+body.event-rainbow .sky-zone::after {
+  background: linear-gradient(90deg,
+    rgba(255, 140, 140, 0.35),
+    rgba(255, 220, 120, 0.35),
+    rgba(170, 240, 140, 0.35),
+    rgba(140, 200, 255, 0.35),
+    rgba(220, 170, 255, 0.35));
+  mix-blend-mode: screen;
+  opacity: 0.7;
+}
+body.event-moon .sky-zone::after {
+  background: radial-gradient(ellipse at 70% 30%, rgba(255, 255, 230, 0.55) 0%, rgba(40, 40, 90, 0.55) 60%);
+  mix-blend-mode: multiply;
+  opacity: 0.55;
+}
+@keyframes eventSkyFade {
+  from { opacity: 0; }
+  to   { opacity: var(--target, 1); }
+}
+
+/* Subtle page-edge glow while event is active (gentler than shiny frame). */
+body.event-active::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  animation: eventFrameFade 800ms ease-out forwards;
+}
+body.event-storm::before    { box-shadow: inset 0 0 80px 12px rgba(88, 160, 230, 0.35); }
+body.event-rainbow::before  { box-shadow: inset 0 0 80px 12px rgba(200, 120, 220, 0.28); }
+body.event-moon::before     { box-shadow: inset 0 0 80px 12px rgba(180, 180, 255, 0.32); }
+
+@keyframes eventFrameFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* --- Mutation catch rows --- */
+.catch-entry.is-mutation .catch-card {
+  position: relative;
+  overflow: visible;
+}
+.catch-entry.is-mutation .catch-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  box-shadow: 0 0 0 2px var(--mut-color, #58c8ff), 0 0 16px 2px var(--mut-glow, rgba(88, 200, 255, 0.6));
+  z-index: 3;
+}
+.catch-entry.is-mutation.mut-electric  { --mut-color: #58c8ff; --mut-glow: rgba(88, 200, 255, 0.6); }
+.catch-entry.is-mutation.mut-prismatic { --mut-color: #ff7ad0; --mut-glow: rgba(255, 122, 208, 0.55); }
+.catch-entry.is-mutation.mut-lunar     { --mut-color: #c9c9ff; --mut-glow: rgba(232, 233, 255, 0.7); }
+
+.catch-mut-icon {
+  display: inline-block;
+  font-size: 0.95rem;
+  margin-right: 2px;
+  filter: drop-shadow(0 0 4px var(--mut-glow, rgba(88, 200, 255, 0.6)));
+}
+
+.catch-entry.is-mutation .catch-emoji.mutation .fish-art {
+  filter: drop-shadow(0 0 6px var(--mut-glow, rgba(88, 200, 255, 0.6))) saturate(1.2);
+}
+
+/* V12: Storm lightning flash — bright double-blink across the sky zone. */
+.lightning-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(220, 240, 255, 0.6));
+  mix-blend-mode: screen;
+  animation: lightningFlash 700ms ease-out forwards;
+  z-index: 5;
+}
+@keyframes lightningFlash {
+  0%   { opacity: 0; }
+  6%   { opacity: 1; }
+  14%  { opacity: 0.15; }
+  22%  { opacity: 0.9; }
+  40%  { opacity: 0.35; }
+  100% { opacity: 0; }
+}
+/* Slight electric-blue rim added to the pond during flashes for extra pop. */
+body.event-storm .pond { position: relative; }
+body.event-storm .pond::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 40px 2px rgba(120, 180, 255, 0.25);
+  z-index: 2;
+}
+
+/* V12: Rainbow arc — SVG stacked bands arching over the pond's sky zone. */
+.rainbow-arc {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  opacity: 0;
+  animation: rainbowArcAppear 900ms ease-out 200ms forwards, rainbowShimmer 4s ease-in-out 1.1s infinite;
+}
+.rainbow-arc svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  filter: drop-shadow(0 2px 12px rgba(255, 220, 130, 0.55));
+}
+@keyframes rainbowArcAppear {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to   { opacity: 0.85; transform: translateY(0) scale(1); }
+}
+@keyframes rainbowShimmer {
+  0%, 100% { filter: drop-shadow(0 2px 12px rgba(255, 220, 130, 0.55)); }
+  50%      { filter: drop-shadow(0 2px 18px rgba(255, 240, 180, 0.9)) brightness(1.08); }
+}
+
+/* V12: Drifting moon during moon event — slow L→R drift, soft halo glow. */
+.drifting-moon {
+  position: absolute;
+  top: 12%;
+  left: -14%;
+  font-size: 3.2rem;
+  filter: drop-shadow(0 0 18px rgba(255, 250, 220, 0.85))
+          drop-shadow(0 0 36px rgba(200, 200, 255, 0.55));
+  transition: left 58s linear;
+  z-index: 4;
+  animation: moonBob 6s ease-in-out infinite;
+  pointer-events: none;
+}
+.drifting-moon.drifting { left: 108%; }
+@keyframes moonBob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
+}
+/* Extra aura — soft radial halo that follows the moon via a pseudo-element. */
+.drifting-moon::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 250, 220, 0.35) 0%, rgba(200, 200, 255, 0.15) 40%, transparent 70%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Event notification accents */
+.notif.event-notif.event-storm    { border-left-color: #3a8dde; }
+.notif.event-notif.event-rainbow  { border-left-color: #a05ad8; }
+.notif.event-notif.event-moon     { border-left-color: #7470d6; }
+.notif.mut-electric  { border-left-color: #58c8ff; }
+.notif.mut-prismatic { border-left-color: #ff7ad0; }
+.notif.mut-lunar     { border-left-color: #c9c9ff; }
+
+/* V12: Album mutation strip — one pip per mutation, faded until caught. */
+.album-mut-strip {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 6px;
+}
+.album-mut-pip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(200, 210, 220, 0.4);
+  font-size: 0.9rem;
+  line-height: 1;
+  filter: grayscale(1) opacity(0.4);
+  transition: filter 200ms ease, transform 200ms ease;
+  cursor: help;
+}
+.album-mut-pip.caught {
+  filter: none;
+  box-shadow: 0 0 0 2px var(--pip-color, #58c8ff), 0 0 10px 1px var(--pip-glow, rgba(88, 200, 255, 0.5));
+  background: var(--pip-soft, rgba(88, 200, 255, 0.18));
+  animation: mutPipLit 3.2s ease-in-out infinite;
+}
+.album-mut-pip.mut-electric  { --pip-color: #58c8ff; --pip-glow: rgba(88, 200, 255, 0.55); --pip-soft: rgba(88, 200, 255, 0.18); }
+.album-mut-pip.mut-prismatic { --pip-color: #ff7ad0; --pip-glow: rgba(255, 122, 208, 0.55); --pip-soft: rgba(255, 122, 208, 0.18); }
+.album-mut-pip.mut-lunar     { --pip-color: #c9c9ff; --pip-glow: rgba(232, 233, 255, 0.7);  --pip-soft: rgba(232, 233, 255, 0.25); }
+@keyframes mutPipLit {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.08); }
+}

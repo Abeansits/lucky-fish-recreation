@@ -1,0 +1,13 @@
+.git
+.DS_Store
+**/.DS_Store
+*.log
+screenshots/
+scripts/
+*.md
+.env
+.env.*
+*.pem
+*.key
+id_rsa
+id_ed25519
