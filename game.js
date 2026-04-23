@@ -2649,7 +2649,14 @@
     f.className = "bg-ambient-fish";
     f.alt = "";
     f.decoding = "async";
-    f.src = AMBIENT_BG_SOURCES[Math.floor(Math.random() * AMBIENT_BG_SOURCES.length)];
+    // V14.4: 1-in-20 chance of the "chicken nugget fish" cameo. Same swim
+    // behavior, just a different asset + slight scale tweak via .nugget class.
+    if (Math.random() < 0.05) {
+      f.classList.add("nugget");
+      f.src = "assets/decorations/nugget_fish.png";
+    } else {
+      f.src = AMBIENT_BG_SOURCES[Math.floor(Math.random() * AMBIENT_BG_SOURCES.length)];
+    }
     f.style.top = `${68 + Math.random() * 22}%`;
     const dirLR = Math.random() < 0.5;
     f.style.left = dirLR ? "-18%" : "118%";
@@ -3620,6 +3627,15 @@
     updateBuffPills();
     renderNextGoal();
     renderPearls();
+    // V14.4 dev flag: `?biome=coral|arctic|sunset|jungle` swaps the pond
+    // background for a painted biome scene. Cosmetic only — no gameplay impact.
+    try {
+      const biome = new URLSearchParams(location.search).get("biome");
+      if (["coral", "arctic", "sunset", "jungle"].includes(biome)) {
+        const pond = document.getElementById("pond");
+        if (pond) pond.classList.add(`biome-${biome}`);
+      }
+    } catch (e) { /* ignore URL parse issues */ }
     renderDecorations();
     renderEdgeFlora();
     renderMuteToggle();
