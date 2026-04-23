@@ -2744,7 +2744,8 @@
     }
     // Write as CSS vars on <body>; pond gradient reads these.
     document.body.style.setProperty("--night-mix", nightness.toFixed(3));
-    if (force || phase !== dayNightPhaseLabel) {
+    const phaseChanged = phase !== dayNightPhaseLabel;
+    if (force || phaseChanged) {
       dayNightPhaseLabel = phase;
       document.body.dataset.dnPhase = phase;
       // Swap the celestial art when the phase crosses into mostly-dark or
@@ -2775,8 +2776,17 @@
       const x = bodyT * 100;
       // Half-sine parabola: y = 85% at horizon, 15% at zenith.
       const y = 85 - Math.sin(bodyT * Math.PI) * 70;
+      // Teleport on phase change or first write so the new celestial body
+      // doesn't animate across the horizon (sunset → moonrise would slide
+      // from right-to-left at surface level over 3s otherwise).
+      const teleport = phaseChanged || !$celestial.style.left;
+      if (teleport) $celestial.style.transition = "none";
       $celestial.style.left = `${x.toFixed(1)}%`;
       $celestial.style.top  = `${y.toFixed(1)}%`;
+      if (teleport) {
+        void $celestial.offsetWidth; // force reflow before restoring transition
+        $celestial.style.transition = "";
+      }
     }
   }
 

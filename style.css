@@ -373,10 +373,12 @@ h2 {
   width: 100%;
   /* V10: pond flexes to fill its panel so the catches panel no longer
      leaves a dead white gap below the water. Clamps keep it sane on
-     very short/tall viewports. */
+     very short/tall viewports. V14.3: min-height tracks viewport so
+     desktop gets a big pond instead of the 440px floor under a tall
+     empty panel. */
   flex: 1 1 auto;
-  min-height: 440px;
-  max-height: 78vh;
+  min-height: clamp(440px, calc(100dvh - 260px), 820px);
+  max-height: 82vh;
   border-radius: var(--radius);
   overflow: hidden;
   /* Sky on top, water below — gradient changes color hard at the surface line. */
@@ -1991,9 +1993,11 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
 
 /* ---------- V8 tackle bag ---------- */
 /* The board drops from 3 columns to 2 once rods live in the bag.
-   Gated to ≥921px so the mobile breakpoint above can actually stack. */
+   Gated to ≥921px so the mobile breakpoint above can actually stack.
+   Catches panel is clamped (260–340px) so the pond takes all remaining
+   width — larger pond, tighter catches column. */
 @media (min-width: 921px) {
-  .board { grid-template-columns: 1.55fr 1fr; }
+  .board { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
 }
 
 .tackle-bag-chip {
@@ -2970,15 +2974,14 @@ body.welcome-open { overflow: hidden; }
 .ambient-fish .bg-ambient-shark {
   position: absolute;
   will-change: left, transform;
+  /* Solid art — the painterly Ideogram output already has strong cel-shading
+     that reads as recession; opacity dimming made them feel half-dissolved. */
   filter: drop-shadow(0 4px 6px rgba(2, 30, 60, 0.45));
-  opacity: 0.72;
   pointer-events: none;
   z-index: 1; /* below the main ambient emoji fish which run at z:2 */
 }
 .ambient-fish .bg-ambient-fish { width: 88px; height: auto; }
-/* Shark is solid — V14.1 feedback: 0.62 made coral show through. 0.92 keeps
-   a subtle "atmospheric" recession without visible transparency. */
-.ambient-fish .bg-ambient-shark { width: 132px; height: auto; opacity: 0.92; }
+.ambient-fish .bg-ambient-shark { width: 132px; height: auto; }
 
 /* ============================================================================
    V14 day/night cycle — cosmetic recolor only. --night-mix is 0..1, driven
