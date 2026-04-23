@@ -3106,11 +3106,27 @@ body.event-fog .sky-zone::before {
 .pond.biome-arctic { --biome-image: url("assets/env/biome_arctic.png"); }
 .pond.biome-sunset { --biome-image: url("assets/env/biome_sunset.png"); }
 .pond.biome-jungle { --biome-image: url("assets/env/biome_jungle.png"); }
-/* Biomes paint their own horizon foreground — hide the default far-bank. */
+/* Biomes paint their own horizon foreground and water surface — hide the
+   default far-bank and the scalloped surface SVG so we don't get a white
+   line running across the painted waterline. */
 .pond.biome-coral  .far-bank,
 .pond.biome-arctic .far-bank,
 .pond.biome-sunset .far-bank,
-.pond.biome-jungle .far-bank { display: none; }
+.pond.biome-jungle .far-bank,
+.pond.biome-coral  .water-surface,
+.pond.biome-arctic .water-surface,
+.pond.biome-sunset .water-surface,
+.pond.biome-jungle .water-surface { display: none; }
+/* Soften the night-tint overlay on biomes. At --night-mix: 1 the default
+   rule goes near-opaque and swallows the painted scene; biomes have their
+   own painted lighting, so we cap the darkening to half-strength — night
+   still dims them noticeably but the art stays legible. */
+.pond.biome-coral::before,
+.pond.biome-arctic::before,
+.pond.biome-sunset::before,
+.pond.biome-jungle::before {
+  opacity: calc(var(--night-mix, 0) * 0.5);
+}
 
 /* ============================================================================
    V14.4 — nugget fish mascot: same swim behavior as bg-ambient-fish, but
