@@ -3072,34 +3072,45 @@ body.event-fog .sky-zone::before {
 }
 
 /* ============================================================================
-   V14.4 — biome backdrops (dev flag `?biome=coral|arctic|sunset|jungle`).
-   Each replaces the CSS water gradient with a painted scene. Pond entities
-   (bubbles, fish, flora) layer in front. The biome art includes its own sky,
-   so .sky-zone's gradient shows through on top (cosmetic parity is fine).
+   V14.5 — biome backdrops (dev flag `?biome=coral|arctic|sunset|jungle`).
+   Each PNG is composed for layering: top 32% is transparent (revealing the
+   pond's procedural sky gradient + the game's sky-zone entities — sun/moon,
+   clouds, birds, airplane, weather), bottom 68% is the painted underwater
+   scene with foreground silhouettes (mountains, palms, icebergs) poking up
+   into the transparent sky region. Stretching to 100% 100% locks the
+   painted waterline to the pond's --surface-y (32%).
    ============================================================================ */
 .pond.biome-coral,
 .pond.biome-arctic,
 .pond.biome-sunset,
 .pond.biome-jungle {
-  background-size: cover;
-  background-position: center;
+  /* Stack: biome PNG on top of the existing radial highlight + linear sky/water
+     gradient. The biome's transparent sky region lets the gradient sky color
+     show through while sky-zone entities (z-index above background) render on
+     top. Aspect-stretching the biome image is intentional — the waterline must
+     land at exactly --surface-y regardless of pond aspect ratio. */
+  background-image:
+    var(--biome-image),
+    radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.22) 0%, transparent 50%),
+    linear-gradient(180deg,
+      #c7ecff 0%,
+      #d8f4ff calc(var(--surface-y) - 2%),
+      #5fb6e0 calc(var(--surface-y) + 2%),
+      #2e80c0 65%,
+      #083960 100%);
+  background-size: 100% 100%, auto, auto;
+  background-position: top left;
   background-repeat: no-repeat;
 }
-.pond.biome-coral  { background-image: url("assets/env/biome_coral.png");  }
-.pond.biome-arctic { background-image: url("assets/env/biome_arctic.png"); }
-.pond.biome-sunset { background-image: url("assets/env/biome_sunset.png"); }
-.pond.biome-jungle { background-image: url("assets/env/biome_jungle.png"); }
-/* Biomes have their own horizon art — hide the default far-bank strip. */
+.pond.biome-coral  { --biome-image: url("assets/env/biome_coral.png");  }
+.pond.biome-arctic { --biome-image: url("assets/env/biome_arctic.png"); }
+.pond.biome-sunset { --biome-image: url("assets/env/biome_sunset.png"); }
+.pond.biome-jungle { --biome-image: url("assets/env/biome_jungle.png"); }
+/* Biomes paint their own horizon foreground — hide the default far-bank. */
 .pond.biome-coral  .far-bank,
 .pond.biome-arctic .far-bank,
 .pond.biome-sunset .far-bank,
 .pond.biome-jungle .far-bank { display: none; }
-/* Biome art already has its own lighting — skip the day/night tint overlay
-   so the painted scene reads as intended. */
-.pond.biome-coral::before,
-.pond.biome-arctic::before,
-.pond.biome-sunset::before,
-.pond.biome-jungle::before { display: none; }
 
 /* ============================================================================
    V14.4 — nugget fish mascot: same swim behavior as bg-ambient-fish, but

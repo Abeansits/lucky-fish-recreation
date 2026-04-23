@@ -31,9 +31,19 @@ def cut(path: str) -> None:
             visited[y * w + x] = 1
             q.append((x, y))
 
+    # Seed BFS from every white pixel along the perimeter. Corners-only used
+    # to be enough for fish/badge stickers (always centered, white corners),
+    # but biome scenes can have foliage hanging off the corners — we need
+    # edge-wide seeding so flood-fill still catches the white sky pocket
+    # between two canopies. Internal whites stay safe because the outline
+    # separates them from the perimeter.
     q = deque()
-    for (sx, sy) in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
-        push(q, sx, sy)
+    for x in range(w):
+        push(q, x, 0)
+        push(q, x, h - 1)
+    for y in range(h):
+        push(q, 0, y)
+        push(q, w - 1, y)
 
     while q:
         x, y = q.popleft()
