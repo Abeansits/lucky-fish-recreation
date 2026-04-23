@@ -39,12 +39,19 @@ html, body {
 }
 
 body {
-  padding: 18px 22px 28px;
+  /* Mobile cheap wins: dvh follows the iOS URL bar (no jump when it hides);
+     safe-area keeps the home indicator off the bottom FAB row. */
+  padding: 18px 22px calc(28px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-height: 100vh;
+  min-height: 100dvh;
+  overscroll-behavior: none;
 }
+
+/* Mobile: kill the 300ms tap delay + double-tap-to-zoom on every button.
+   One row below overrides it for the catches list, which needs pan-y. */
+button { touch-action: manipulation; }
 
 h1, h2, h3 { margin: 0; font-weight: 800; letter-spacing: -0.01em; color: var(--ocean-deep); }
 h2 {
@@ -1426,7 +1433,7 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
 .settings-fab {
   position: fixed;
   left: 22px;
-  bottom: 22px;
+  bottom: calc(22px + env(safe-area-inset-bottom));
   width: 52px;
   height: 52px;
   border-radius: 50%;
@@ -1559,7 +1566,7 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
 .fab-stack {
   position: fixed;
   right: 22px;
-  bottom: 22px;
+  bottom: calc(22px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column-reverse; /* bottom-most button is first in DOM feel */
   gap: 12px;
@@ -1983,8 +1990,11 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
 }
 
 /* ---------- V8 tackle bag ---------- */
-/* The board drops from 3 columns to 2 once rods live in the bag. */
-.board { grid-template-columns: 1.55fr 1fr; }
+/* The board drops from 3 columns to 2 once rods live in the bag.
+   Gated to ≥921px so the mobile breakpoint above can actually stack. */
+@media (min-width: 921px) {
+  .board { grid-template-columns: 1.55fr 1fr; }
+}
 
 .tackle-bag-chip {
   appearance: none;
