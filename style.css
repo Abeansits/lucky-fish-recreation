@@ -3086,15 +3086,16 @@ body.event-fog .sky-zone::before {
 .pond.biome-jungle {
   /* Stack: biome PNG on top of the existing radial highlight + linear sky/water
      gradient. The biome's transparent sky region lets the gradient sky color
-     show through while sky-zone entities (z-index above background) render on
-     top. Aspect-stretching the biome image is intentional — the waterline must
-     land at exactly --surface-y regardless of pond aspect ratio. */
+     show through while sky-zone entities render on top. The sky stops use
+     --biome-sky so the gradient harmonizes with the PNG's painted sky color
+     — otherwise the boundary between transparent and painted PNG regions
+     shows as a horizontal seam. */
   background-image:
     var(--biome-image),
     radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.22) 0%, transparent 50%),
     linear-gradient(180deg,
-      #c7ecff 0%,
-      #d8f4ff calc(var(--surface-y) - 2%),
+      var(--biome-sky, #c7ecff) 0%,
+      var(--biome-sky, #d8f4ff) calc(var(--surface-y) - 2%),
       #5fb6e0 calc(var(--surface-y) + 2%),
       #2e80c0 65%,
       #083960 100%);
@@ -3102,10 +3103,10 @@ body.event-fog .sky-zone::before {
   background-position: top left;
   background-repeat: no-repeat;
 }
-.pond.biome-coral  { --biome-image: url("assets/env/biome_coral.png");  }
-.pond.biome-arctic { --biome-image: url("assets/env/biome_arctic.png"); }
-.pond.biome-sunset { --biome-image: url("assets/env/biome_sunset.png"); }
-.pond.biome-jungle { --biome-image: url("assets/env/biome_jungle.png"); }
+.pond.biome-coral  { --biome-image: url("assets/env/biome_coral.png");  --biome-sky: #a7c8c4; }
+.pond.biome-arctic { --biome-image: url("assets/env/biome_arctic.png"); --biome-sky: #bfe4f2; }
+.pond.biome-sunset { --biome-image: url("assets/env/biome_sunset.png"); --biome-sky: #f9bd93; }
+.pond.biome-jungle { --biome-image: url("assets/env/biome_jungle.png"); --biome-sky: #e5ece1; }
 /* Biomes paint their own horizon foreground and water surface — hide the
    default far-bank and the scalloped surface SVG so we don't get a white
    line running across the painted waterline. */
