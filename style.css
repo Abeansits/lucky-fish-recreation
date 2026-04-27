@@ -373,12 +373,14 @@ h2 {
   width: 100%;
   /* V10: pond flexes to fill its panel so the catches panel no longer
      leaves a dead white gap below the water. Clamps keep it sane on
-     very short/tall viewports. V14.3: min-height tracks viewport so
-     desktop gets a big pond instead of the 440px floor under a tall
-     empty panel. */
+     very short/tall viewports. V14.5.4: subtract 400px (header ≈ 287px
+     + panel padding ≈ 23px + cast button row ≈ 75px + safety) so the
+     Cast button stays in the viewport at typical desktop sizes
+     (1440×900, 1920×1080). Cap at 700px so very tall screens don't
+     produce a square pond that pushes catches off-screen. */
   flex: 1 1 auto;
-  min-height: clamp(440px, calc(100dvh - 260px), 820px);
-  max-height: 82vh;
+  min-height: clamp(440px, calc(100dvh - 400px), 660px);
+  max-height: clamp(440px, calc(100dvh - 380px), 700px);
   border-radius: var(--radius);
   overflow: hidden;
   /* Sky on top, water below — gradient changes color hard at the surface line. */
