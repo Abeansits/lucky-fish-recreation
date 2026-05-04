@@ -1607,6 +1607,10 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  /* V14.6: floor on intrinsic height so the parent grid's row sizing
+     can't collapse rod/deco cards when sibling sections push more
+     vertical space (the biome sub-grid). */
+  min-height: 200px;
 }
 .shop-card.owned { border-color: #58c16b; background: linear-gradient(180deg, #ffffff 0%, #e7f8ea 100%); }
 .shop-card.locked { opacity: 0.82; }
@@ -1692,6 +1696,45 @@ body.slowmo { animation: slowmoFilter 520ms ease-in-out; }
 }
 .shop-card.milestone-locked .rod-shop-art,
 .shop-card.milestone-locked .shop-card-emoji { filter: grayscale(0.75) brightness(0.94); }
+
+/* V14.6: biome cards. Thumbnail is the painted landscape PNG (or a CSS
+   gradient mimicking the home pond) cropped to a wide rectangle so kids
+   can recognize each place at a glance. Biome cards need more vertical
+   room than the rod/deco cards (thumb + name + sub + milestone + price +
+   button), so we force a min-height and let them grow past the grid's
+   default row height. The grid auto-row will pick up the taller cards. */
+/* Sub-grid for biome cards so their tall layout doesn't distort the
+   rod/decoration rows in the parent shop-grid. Spans all columns. */
+.shop-places-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.shop-card.biome-card {
+  overflow: visible;
+}
+.shop-card.biome-card .biome-shop-art {
+  display: block;
+  align-self: stretch;
+  width: 100%;
+  font-size: 0;
+  line-height: 0;
+}
+.shop-card.biome-card .biome-art {
+  display: block;
+  width: 100%;
+  height: 84px;
+  object-fit: cover;
+  object-position: center 35%;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+.shop-card.biome-card .biome-art.biome-art-home {
+  background: linear-gradient(180deg, #c7ecff 0%, #d8f4ff 30%, #5fb6e0 38%, #2e80c0 70%, #083960 100%);
+}
+.shop-card.biome-card.milestone-locked .biome-art { filter: grayscale(0.6) brightness(0.94); }
+.shop-card.biome-card.locked .biome-art { filter: grayscale(0.3) brightness(0.96); }
 .shop-lock-line {
   font-size: 0.82rem;
   font-weight: 700;

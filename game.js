@@ -252,6 +252,16 @@
     const onerr = _artEscape(_artFallback(deco.emoji, classes));
     return `<img class="${classes}" src="assets/decorations/${deco.id}.png" alt="${_artEscape(deco.name)}" onerror="${onerr}">`;
   }
+  // V14.6: biome thumb. Home has no PNG — the CSS .biome-art.home class
+  // paints the default pond gradient so the card still has a thumbnail.
+  function biomeArt(biome, { cls = "" } = {}) {
+    const classes = ["biome-art", `biome-art-${biome.id}`, cls].filter(Boolean).join(" ");
+    if (biome.id === "home") {
+      return `<span class="${classes}" aria-hidden="true"></span>`;
+    }
+    const onerr = _artEscape(_artFallback(biome.emoji, classes));
+    return `<img class="${classes}" src="assets/env/biome_${biome.id}.png" alt="${_artEscape(biome.name)}" onerror="${onerr}">`;
+  }
 
   // ---------- V3 additions ----------
 
@@ -295,6 +305,32 @@
     { id: "gem",     name: "Treasure Gem", emoji: "💎", price: 220, pos: { x: 45, y: 86 } },
     { id: "mermaid", name: "Mermaid",      emoji: "🧜", price: 380, pos: { x: 22, y: 76 } },
     { id: "dragon",  name: "Sea Dragon",   emoji: "🐉", price: 600, pos: { x: 74, y: 72 } },
+  ];
+
+  // V14.6: places (biomes). Cosmetic backdrops the player can travel to.
+  // Two unlock paths: hit the species/legendary milestone OR pay pearls.
+  // Whichever happens first marks the place owned and fires the unlock notif.
+  // Home is the default starting pond; it's always present and free.
+  const BIOMES = [
+    { id: "home",   name: "Home Pond",   emoji: "🏡", price: 0,    unlock: null,
+      desc: "Where it all began.",
+      tagline: "Always your starting waters." },
+    { id: "coral",  name: "Coral Reef",  emoji: "🐚", price: 200,
+      unlock: { speciesDiscovered: 10, label: "Discover 10 species" },
+      desc: "Warm reef with bright fish.",
+      tagline: "A sun-soaked reef." },
+    { id: "arctic", name: "Arctic Bay",  emoji: "🧊", price: 500,
+      unlock: { speciesDiscovered: 20, label: "Discover 20 species" },
+      desc: "Icy waters and floating bergs.",
+      tagline: "Where the icebergs drift." },
+    { id: "sunset", name: "Sunset Cove", emoji: "🌅", price: 1000,
+      unlock: { legendaryCatches: 1, label: "Catch a Legendary fish" },
+      desc: "Golden hour on calm water.",
+      tagline: "Caught in eternal dusk." },
+    { id: "jungle", name: "Jungle Pool", emoji: "🌴", price: 2000,
+      unlock: { speciesDiscovered: 30, label: "Discover 30 species" },
+      desc: "Hidden pool deep in the green.",
+      tagline: "Mossy, secret, alive." },
   ];
 
   // ---------- Persistence ----------
@@ -414,6 +450,15 @@
       // Analytics: achievement id -> first-unlocked ms. Used to fire
       // `achievement_unlocked` exactly once per achievement per profile.
       achievementsUnlocked: {},
+      // V14.6: biome (place) progression. `unlocked` maps biome id → ms epoch
+      // of unlock (purchase or milestone). `current` is the active backdrop.
+      // `milestoneSeen` prevents re-firing the auto-unlock notif if the player
+      // bought a biome before its milestone fired.
+      biomes: {
+        unlocked: { home: 1 },
+        current: "home",
+        milestoneSeen: {},
+      },
     };
   }
 
@@ -440,6 +485,11 @@
         mutationsDiscovered: { ...(parsed.mutationsDiscovered || {}) },
         mutationsCaught: Number(parsed.mutationsCaught) || 0,
         achievementsUnlocked: { ...(parsed.achievementsUnlocked || {}) },
+        biomes: {
+          unlocked: { home: 1, ...(parsed.biomes?.unlocked || {}) },
+          current: parsed.biomes?.current || "home",
+          milestoneSeen: { ...(parsed.biomes?.milestoneSeen || {}) },
+        },
       };
     } catch (e) {
       return freshProgression();
@@ -1696,6 +1746,9 @@
       prog.milestonesSeen.albumComplete = true;
       showMilestone("📖 Album Complete!", "Master Angler! You found every fish!", { banner: true, badge: "albumComplete", badgeEmoji: "📖" });
     }
+    // V14.6: biome milestones use the cosier "🗺️ New place unlocked!" notif
+    // instead of the headline banner — they're cosmetic, not the album reveals.
+    checkBiomeMilestones();
   }
 
   function applyTierBuff(fish) {
@@ -3015,6 +3068,62 @@
       $shopGrid.appendChild(card);
     }
 
+    // V14.6: Places section. Cards mirror the rod-card states: locked
+    // (milestone unmet AND can't afford), for-sale (any path open), or
+    // owned (Travel button + ✓ Active when current). Wrapped in its own
+    // sub-grid spanning all columns so the taller biome cards don't
+    // distort the rod / decoration row heights.
+    const placesHeader = document.createElement("div");
+    placesHeader.className = "shop-section-header";
+    placesHeader.textContent = "🗺️ Places";
+    $shopGrid.appendChild(placesHeader);
+
+    const placesGrid = document.createElement("div");
+    placesGrid.className = "shop-places-grid";
+    $shopGrid.appendChild(placesGrid);
+
+    for (const biome of BIOMES) {
+      const owned = !!prog.biomes.unlocked[biome.id];
+      const isCurrent = prog.biomes.current === biome.id;
+      const milestoneMet = biomeMilestoneMet(biome);
+      const canAfford = prog.pearls >= biome.price;
+      const card = document.createElement("div");
+      card.className = "shop-card biome-card" +
+        (owned ? " owned" : (!milestoneMet && !canAfford ? " milestone-locked" : (canAfford ? "" : " locked")));
+
+      let footer;
+      if (owned) {
+        footer = isCurrent
+          ? `<span class="shop-owned-tag">✓ You're here</span>`
+          : `<button class="shop-buy" data-travel="${biome.id}">✈️ Travel</button>`;
+      } else {
+        const lines = [];
+        if (biome.unlock) {
+          const p = biomeUnlockProgress(biome);
+          const progressLine = p.need
+            .map(n => `${Math.min(n.current, n.target)}/${n.target} ${n.noun}`)
+            .join(", ");
+          lines.push(`<span class="shop-lock-line">🔓 ${p.label}</span>
+                      <span class="shop-lock-progress">${progressLine}</span>`);
+        }
+        lines.push(`<span class="shop-card-price">🫧 ${biome.price.toLocaleString()}</span>
+                    <button class="shop-buy" ${canAfford ? "" : "disabled"} data-biome="${biome.id}">Buy</button>`);
+        footer = lines.join("");
+      }
+
+      card.innerHTML = `
+        <span class="shop-card-emoji biome-shop-art">${biomeArt(biome)}</span>
+        <span class="shop-card-name">${biome.emoji} ${biome.name}</span>
+        <span class="shop-card-sub">${biome.tagline}</span>
+        ${footer}
+      `;
+      const buy = card.querySelector("[data-biome]");
+      if (buy) buy.addEventListener("click", () => buyBiome(biome.id));
+      const travel = card.querySelector("[data-travel]");
+      if (travel) travel.addEventListener("click", () => travelBiome(biome.id));
+      placesGrid.appendChild(card);
+    }
+
     const decoHeader = document.createElement("div");
     decoHeader.className = "shop-section-header";
     decoHeader.textContent = "🎀 Pond Decorations";
@@ -3052,6 +3161,80 @@
     showRodPurchase(rod);
     saveProgression();
     syncAchievementUnlocks();
+  }
+
+  // V14.6: biome helpers. URL `?biome=` flag still wins over saved current
+  // for testing — see init() for the override path.
+  function biomeMilestoneMet(biome) {
+    if (!biome.unlock) return true;
+    const u = biome.unlock;
+    const speciesCount = Object.keys(prog.discovered).length;
+    return (
+      (u.speciesDiscovered == null || speciesCount >= u.speciesDiscovered) &&
+      (u.legendaryCatches == null || prog.totals.legendary >= u.legendaryCatches)
+    );
+  }
+  function biomeUnlockProgress(biome) {
+    if (!biome.unlock) return null;
+    const u = biome.unlock;
+    const need = [];
+    if (u.speciesDiscovered != null) need.push({ current: Object.keys(prog.discovered).length, target: u.speciesDiscovered, noun: "species" });
+    if (u.legendaryCatches != null) need.push({ current: prog.totals.legendary, target: u.legendaryCatches, noun: "legendaries" });
+    return { need, label: u.label };
+  }
+  function applyBiome(id) {
+    const pond = document.getElementById("pond");
+    if (!pond) return;
+    for (const b of BIOMES) pond.classList.remove(`biome-${b.id}`);
+    if (id && id !== "home") pond.classList.add(`biome-${id}`);
+  }
+  function buyBiome(id) {
+    const biome = BIOMES.find(b => b.id === id);
+    if (!biome || biome.id === "home") return;
+    if (prog.biomes.unlocked[id]) return;
+    if (prog.pearls < biome.price) return;
+    prog.pearls -= biome.price;
+    prog.biomes.unlocked[id] = Date.now();
+    prog.biomes.milestoneSeen[id] = true; // suppress milestone notif if it later qualifies
+    renderPearls();
+    renderShop();
+    showBiomeUnlocked(biome, { purchased: true });
+    saveProgression();
+  }
+  function travelBiome(id) {
+    const biome = BIOMES.find(b => b.id === id);
+    if (!biome) return;
+    if (id !== "home" && !prog.biomes.unlocked[id]) return;
+    if (prog.biomes.current === id) return;
+    prog.biomes.current = id;
+    applyBiome(id);
+    renderShop();
+    saveProgression();
+  }
+  function checkBiomeMilestones() {
+    for (const biome of BIOMES) {
+      if (!biome.unlock) continue;
+      if (prog.biomes.unlocked[biome.id]) continue;
+      if (prog.biomes.milestoneSeen[biome.id]) continue;
+      if (biomeMilestoneMet(biome)) {
+        prog.biomes.unlocked[biome.id] = Date.now();
+        prog.biomes.milestoneSeen[biome.id] = true;
+        showBiomeUnlocked(biome, { purchased: false });
+      }
+    }
+  }
+  function showBiomeUnlocked(biome, { purchased }) {
+    const n = document.createElement("div");
+    n.className = "notif celebrate rarity-legendary biome-unlock-notif";
+    n.innerHTML = `
+      <div class="notif-emoji">${biome.emoji}</div>
+      <div class="notif-text">
+        <span class="notif-hat">🗺️ New place unlocked!</span>
+        <span class="notif-title">${biome.name}</span>
+        <span class="notif-sub">${purchased ? "Visit it from the shop." : "Travel from the shop's Places."}</span>
+      </div>
+    `;
+    pushNotif(n, NOTIF_HOLD.big);
   }
 
   function buyDecoration(id) {
@@ -3627,15 +3810,16 @@
     updateBuffPills();
     renderNextGoal();
     renderPearls();
-    // V14.4 dev flag: `?biome=coral|arctic|sunset|jungle` swaps the pond
-    // background for a painted biome scene. Cosmetic only — no gameplay impact.
+    // V14.6: apply the saved current biome. URL `?biome=` still wins as a
+    // dev override and auto-unlocks for testing without spending pearls.
     try {
-      const biome = new URLSearchParams(location.search).get("biome");
-      if (["coral", "arctic", "sunset", "jungle"].includes(biome)) {
-        const pond = document.getElementById("pond");
-        if (pond) pond.classList.add(`biome-${biome}`);
+      const override = new URLSearchParams(location.search).get("biome");
+      if (override && BIOMES.find(b => b.id === override)) {
+        prog.biomes.unlocked[override] = prog.biomes.unlocked[override] || Date.now();
+        prog.biomes.current = override;
       }
     } catch (e) { /* ignore URL parse issues */ }
+    applyBiome(prog.biomes.current);
     renderDecorations();
     renderEdgeFlora();
     renderMuteToggle();
